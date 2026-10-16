@@ -29,6 +29,28 @@ def parse(ids):
     return tree
 
 
+def unparse(tree):
+    """Tree -> IDS string."""
+    return tree if is_leaf(tree) else tree[0] + "".join(unparse(c) for c in tree[1])
+
+
+def replace(tree, path, new):
+    """Copy of tree with the node at path replaced by new."""
+    if not path:
+        return new
+    op, children = tree
+    children = list(children)
+    children[path[0]] = replace(children[path[0]], path[1:], new)
+    return (op, children)
+
+
+def leaf_paths(tree, path=()):
+    """(path, leaf) for every leaf."""
+    if is_leaf(tree):
+        return [(path, tree)]
+    return [x for i, c in enumerate(tree[1]) for x in leaf_paths(c, path + (i,))]
+
+
 def is_leaf(tree):
     return isinstance(tree, str)
 

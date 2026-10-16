@@ -35,8 +35,9 @@ class Outcome:
 
 def _init(font_path, ppem, mmah_root, override_paths, level, threshold):
     from .target import open_target
-    _worker.update(font=open_target(font_path, ppem), mmah=MMAH(mmah_root), overrides=ov.load(override_paths),
-                   level=level, threshold=threshold)
+    overrides = ov.load(override_paths)
+    _worker.update(font=open_target(font_path, ppem), mmah=MMAH(mmah_root, overrides["structure"]),
+                   overrides=overrides, level=level, threshold=threshold)
 
 
 def _one(char):

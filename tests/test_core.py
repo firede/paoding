@@ -154,6 +154,38 @@ def test_reference_structure_override(mmah):
         np.testing.assert_array_equal(before, after)
 
 
+def test_reference_expands_components(mmah):
+    assert mmah.reference("照").ids == "⿱昭灬"
+    ref = mmah.reference("照", depth=3)
+    assert ref.ids == "⿱⿰日⿱刀口灬"
+    assert ref.tree[1][1] == "灬"
+    assert ref.nodes(1)[0] == [(0,), (1,)]
+    assert set(ref.paths) == {(0, 0), (0, 1, 0), (0, 1, 1), (1,)}
+    # 日 is a basic component: MMAH's ⿴口一 is not followed
+    assert all(len(p) <= 3 for p in ref.paths)
+
+
+def test_reference_basic_components(mmah):
+    assert all(mmah.basic(c) for c in "口木日氵王贝")
+    assert not any(mmah.basic(c) for c in "召昭吂")
+
+
+def test_level_two_nested_split(outline_font, mmah):
+    seg = segment("圈", outline_font, mmah, level=2)
+    assert [ids.fmt(n) for n in seg.nodes] == ["0", "1.0", "1.1"]
+    pieces = seg.pieces("flat")
+    assert all(area(p) > 1000 for p in pieces.values())
+    assert seg.status == "auto"
+
+
+
+def test_level_two_hairline_faces(outline_font, mmah):
+    # two hairline faces in 麩 collapse when their union is snapped to the grid
+    seg = segment("麩", outline_font, mmah, level=2)
+    for unit in seg.units:
+        if unit.method == "cut":
+            assert all(area(p) > 0 for p in realize(unit.path, unit.cuts, unit.faces))
+
 def test_outline_units_guo(outline_font):
     units = outline_font.units("国")
     originals = outline_font.contours("国")
@@ -399,7 +431,7 @@ def test_registration_transforms_and_thin_box():
 
 def test_cli_run(tmp_path, monkeypatch, outline_font, mmah):
     # Reuse session inputs while exercising parsing, workers, and output writing.
-    def cached_mmah(path):
+    def cached_mmah(path, structures=None):
         assert Path(path).resolve() == ROOT / "data/mmah"
         return mmah
 

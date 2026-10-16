@@ -12,8 +12,8 @@ strokes onto a target glyph and splits the target's own outlines (or pixels)
 accordingly. The output is an annotation of the target font; MMAH geometry is
 used only as a guide and never written out.
 
-Status: early. Top-level split works for outline fonts; nested levels and the
-bitmap path are in progress.
+Status: early. Outline fonts split well at the top level and below
+(`--level 2` and deeper); the bitmap path is in progress.
 
 ## Use
 
@@ -41,10 +41,14 @@ assignments, stacking order or review status for one font. See
 ## How it works
 
 1. **Reference.** MMAH gives the decomposition, a component path for each
-   stroke, and stroke outlines and medians.
+   stroke, and stroke outlines and medians. For deeper levels, components are
+   expanded from their own entries.
 2. **Registration.** Fit the reference's ink box onto the target's, then a
    smooth non-rigid warp that pulls the medians onto the target's skeleton
-   (matched on position and stroke direction, coarse to fine).
+   (matched on position and stroke direction, coarse to fine). Then, level by
+   level, each component is registered again on its own: an affine fit to the
+   ink it covered, then a gentler warp, so a component keeps its shape and its
+   strokes are not dragged onto a neighbour's ink.
 3. **Assignment.** The target's ink falls into units (an outer contour with its
    holes). A unit crossed by medians of a single component goes to it whole.
    Otherwise it is cut along bands around the registered strokes; where

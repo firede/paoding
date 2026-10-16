@@ -30,7 +30,7 @@ from scipy.spatial import cKDTree
 
 from . import ids
 from .geometry import Canvas, area, from_shapely, op, polygons, resample, to_shapely, union_all
-from .register import register
+from .register import Warp, register, register_parts, skeleton
 
 DEFAULT_THRESHOLD = 0.85
 
@@ -107,7 +107,8 @@ def realize(unit_path, cuts, faces, extend=2.0, pad=3.0):
     """
     shape = to_shapely(unit_path, steps=16)
     lines = [_extend(np.asarray(c), extend) for c in cuts]
-    noded = shapely.unary_union([shape.boundary, *[shapely.LineString(l) for l in lines]])
+    # snap-rounded noding: a cut ending on the outline joins it even at a grazing angle
+    noded = shapely.unary_union([shape.boundary, *[shapely.LineString(l) for l in lines]], grid_size=GRID)
     cells = [f for f in polygons(shapely.GeometryCollection(list(shapely.polygonize(shapely.get_parts(noded)).geoms)))
              if shape.contains(f.representative_point())]
     pts = shapely.points(np.array([f.point for f in faces]))
@@ -149,10 +150,10 @@ def _unit(v):
 # ---------- segmentation ----------
 
 def segment(char, font, mmah, level=1, override=None, canvas=None, min_run=45.0,
-            threshold=DEFAULT_THRESHOLD):
+            threshold=DEFAULT_THRESHOLD, refine=True):
     override = override or {}
     canvas = canvas or Canvas()
-    ref = mmah.reference(char, override.get("structure"))
+    ref = mmah.reference(char, override.get("structure"), depth=level)
     nodes, stroke_node = ref.nodes(level)
     nodes = _stack(nodes, override.get("stack"))
     stroke_node = [nodes.index(ref.paths[i][:level]) for i in range(len(ref.paths))]
@@ -167,7 +168,49 @@ def segment(char, font, mmah, level=1, override=None, canvas=None, min_run=45.0,
         return seg
 
     warp = register(ref.medians, ref.strokes, ink, canvas)
-    lines = [warp(resample(m)) for m in ref.medians]
+    stroke_warps = [warp] * len(ref.medians)
+    if refine:
+        stroke_warps = _refine(seg, font, ref, units, masks, ink, canvas, warp, level, override, min_run)
+    seg.debug.update(ref=ref, ink=ink, canvas=canvas, stroke_node=stroke_node)
+    _assign(seg, font, units, masks, stroke_warps, override, min_run)
+
+    seg.metrics = score(seg)
+    seg.confidence = seg.metrics["confidence"]
+    seg.status = override.get("status") or ("auto" if seg.confidence >= threshold else "low")
+    return seg
+
+
+def _refine(seg, font, ref, units, masks, ink, canvas, warp, level, override, min_run):
+    """Per-part warps, top-down: at each depth, split with the current warps, then
+    register every part of that depth on its own, starting from its parent's warp."""
+    stroke_warps = [warp] * len(ref.medians)
+    skel, ys, xs = skeleton(ink, canvas)
+    for depth in range(1, level + 1):
+        parts = sorted({p[:depth] for p in ref.paths})
+        if len(parts) <= 1:
+            continue
+        stroke_node = [parts.index(p[:depth]) for p in ref.paths]
+        trial = Segmentation(seg.char, seg.glyph, depth, ref.ids, parts, [])
+        trial.debug.update(ref=ref, ink=ink, canvas=canvas, stroke_node=stroke_node)
+        _assign(trial, font, units, masks, stroke_warps, override, min_run)
+        overlay = trial.pieces("overlay")
+        # parts that end above this depth are done
+        todo = [k for k, p in enumerate(parts) if len(p) == depth]
+        groups = [[i for i, s in enumerate(stroke_node) if s == k] for k in todo]
+        owned = [canvas.path_mask(overlay[parts[k]])[ys, xs] for k in todo]
+        current = [stroke_warps[g[0]] for g in groups]
+        starts = [Warp(warp.affine)] * len(groups) if depth == 1 else current
+        for g, w in zip(groups, register_parts(ref.medians, groups, starts, skel, owned, fallbacks=current)):
+            for i in g:
+                stroke_warps[i] = w
+    return stroke_warps
+
+
+def _assign(seg, font, units, masks, stroke_warps, override, min_run):
+    """Draw the strokes through their warps, then give each unit to a part or cut it."""
+    dbg, canvas, nodes = seg.debug, seg.debug["canvas"], seg.nodes
+    ref, ink, stroke_node = dbg["ref"], dbg["ink"], dbg["stroke_node"]
+    lines = [w(resample(m)) for w, m in zip(stroke_warps, ref.medians)]
     inside = ndimage.distance_transform_edt(ink) / canvas.px
     widths = []
     for m in lines:
@@ -177,8 +220,7 @@ def segment(char, font, mmah, level=1, override=None, canvas=None, min_run=45.0,
     # nearest stroke for every pixel
     dist = np.array([ndimage.distance_transform_edt(~canvas.lines([m], width=2)) for m in lines])
     nearest = np.array(stroke_node)[np.argmin(dist, 0)]
-    seg.debug.update(ref=ref, lines=lines, widths=widths, nearest=nearest, ink=ink, canvas=canvas,
-                     stroke_node=stroke_node, warp=warp)
+    dbg.update(lines=lines, widths=widths, nearest=nearest, stroke_warps=stroke_warps)
 
     forced = {int(k): ids.unfmt(v) for k, v in (override.get("units") or {}).items()}
     for u, mask in zip(units, masks):
@@ -201,11 +243,6 @@ def segment(char, font, mmah, level=1, override=None, canvas=None, min_run=45.0,
             flat = [(font.to_em(*o["point"]), ids.unfmt(o["node"])) for o in override.get("flat") or []]
             _cut(res, u, set(int(k) for k in present), seg, flat)
         seg.units.append(res)
-
-    seg.metrics = score(seg)
-    seg.confidence = seg.metrics["confidence"]
-    seg.status = override.get("status") or ("auto" if seg.confidence >= threshold else "low")
-    return seg
 
 
 def _spacing(line):
@@ -303,7 +340,7 @@ def _cut(res, unit, present, seg, flat_overrides, min_face=25.0):
     members = {}
     for i in range(len(faces)):
         members.setdefault(find(i), []).append(i)
-    merged = [[shapely.unary_union([faces[i] for i in m], grid_size=GRID), out[m[0]]] for m in members.values()]
+    merged = [[_merge([faces[i] for i in m]), out[m[0]]] for m in members.values()]
     sep = [shapely.LineString(np.array(seg_key) * GRID) for seg_key, fs in sides.items()
            if len(fs) == 2 and sig[fs[0]] != sig[fs[1]]]
     merged_lines = shapely.get_parts(shapely.line_merge(shapely.unary_union(sep))) if sep else []
@@ -317,6 +354,13 @@ def _cut(res, unit, present, seg, flat_overrides, min_face=25.0):
 
 
 GRID = 0.5    # snap-rounding grid, em units (1/1000 em): far below anything visible
+
+
+def _merge(polys):
+    """Union of adjacent faces on the GRID; a hairline group that snapping would
+    collapse to nothing is kept unsnapped."""
+    g = shapely.unary_union(polys, grid_size=GRID)
+    return g if not g.is_empty else shapely.unary_union(polys)
 
 
 def _segments(poly):
@@ -394,7 +438,7 @@ def score(seg):
     """
     dbg = seg.debug
     canvas, ref, lines, widths = dbg["canvas"], dbg["ref"], dbg["lines"], dbg["widths"]
-    stroke_node, warp = dbg["stroke_node"], dbg["warp"]
+    stroke_node, stroke_warps = dbg["stroke_node"], dbg["stroke_warps"]
     overlay = {n: canvas.path_mask(p) for n, p in seg.pieces("overlay").items()}
     flat = {n: canvas.path_mask(p) for n, p in seg.pieces("flat").items()}
     dbg.update(overlay_masks=overlay, flat_masks=flat)
@@ -420,7 +464,7 @@ def score(seg):
             purity = float(1 - ((own > 0.75 * width + 15) & (other < own - 0.5 * width)).mean())
         else:
             cov = purity = 0.0
-        refmask = canvas.fill([warp(ref.strokes[i]) for i in idx], rule="union")
+        refmask = canvas.fill([stroke_warps[i](ref.strokes[i]) for i in idx], rule="union")
         iou = (flat[n] & refmask).sum() / max((flat[n] | refmask).sum(), 1)
         per[ids.fmt(n)] = {"median_in": round(float(inside.mean()), 3), "purity": round(purity, 3), "skel_cov": round(cov, 3),
                            "iou": round(float(iou), 3), "area": int(flat[n].sum())}

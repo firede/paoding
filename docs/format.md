@@ -24,8 +24,17 @@ indices and coordinates change between font versions.
 
 Parts are addressed by their path in the IDS tree, written with dots:
 `""` is the whole character, `"0"` the first top-level part, `"1.0"` the first
-part of the second. For `赢 ⿱吂⿲月贝凡`, `"0"` is 吂 and `"1.2"` is 凡.
+part of the second. For `照 ⿱⿰日召灬`, `"0"` is 昭 and `"0.1"` is 召.
 `level` says how deep the split goes; level 1 is the top-level split.
+
+`ids` is the tree the paths refer to. Make Me a Hanzi decomposes a character
+only a level or two deep (照 is `⿱昭灬`); below level 1, parts that are
+characters themselves are expanded from their own entries (昭 is `⿰日召`), so
+at level 3 照 is `⿱⿰日⿱刀口灬`. Expansion stops at basic components: those
+MMAH calls pictographic (日, 木, 口), whose parts interweave (`⿻`), or that
+have a single stroke or an unknown part among their parts. A structure override
+can change where it stops. A part whose strokes do not line up with its own
+entry (another stroke count, or other shapes) also stays whole.
 
 `nodes` lists the parts present at that level, in **stacking order, bottom
 first** (IDS order unless overridden). A stroke whose reference path is

@@ -79,7 +79,7 @@ def segment_bitmap(char, font, mmah, level=1, override=None, canvas=None, thresh
 
     seg.grid = PixelLabels(g, flat, overlay, font)
     seg.debug.update(ref=ref, lines=lines, widths=widths, ink=ink, canvas=canvas,
-                     stroke_node=stroke_node, warp=warp)
+                     stroke_node=stroke_node, stroke_warps=[warp] * len(lines))
     seg.metrics = score(seg)
     seg.confidence = seg.metrics["confidence"]
     seg.status = override.get("status") or ("auto" if seg.confidence >= threshold else "low")

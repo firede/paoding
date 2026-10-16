@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 from . import ids
 from .geometry import FlattenPen, draw_svg
@@ -33,6 +34,7 @@ class Reference:
     sources: list            # how each path was decided: matches | unknown-leaf | nearest | override
     radical: str = ""
     issues: list = field(default_factory=list)
+    notes: list = field(default_factory=list)   # components left unexpanded, and why
 
     def nodes(self, level):
         """Parts at a split level and each stroke's index into them.
@@ -47,7 +49,9 @@ class Reference:
 
 
 class MMAH:
-    def __init__(self, root):
+    def __init__(self, root, structures=None):
+        """structures: structure overrides by character, used for components met while expanding."""
+        self.structures = structures or {}
         root = Path(root)
         self.dictionary, self.graphics = {}, {}
         with open(root / "dictionary.txt", encoding="utf-8") as f:
@@ -65,8 +69,13 @@ class MMAH:
     def chars(self):
         return [c for c in self.dictionary if c in self.graphics]
 
-    def reference(self, char, override=None):
-        """Build the reference for one character; override may replace ids and matches."""
+    def reference(self, char, override=None, depth=1, _seen=()):
+        """Build the reference for one character; override may replace ids and matches.
+
+        MMAH decomposes a character one or two levels deep; parts that are
+        themselves characters are expanded from their own entries until the
+        tree reaches `depth` (see _expand).
+        """
         e, g = self.dictionary[char], self.graphics[char]
         override = override or {}
         decomposition = override.get("ids", e["decomposition"])
@@ -124,7 +133,87 @@ class MMAH:
         for k, child in enumerate(ref.tree[1]):
             if (k,) not in used:
                 ref.issues.append(f"part {k} ({ids.leaves(child)}) has no strokes")
+        self._expand(ref, depth, _seen + (char,))
         return ref
+
+    def basic(self, char):
+        """Is char a basic component, not worth splitting further?
+
+        MMAH decomposes even pictographs (口 as 冂 + 一, 木 as 十 + 八), so a
+        component counts as basic when MMAH calls it pictographic, when its
+        parts interweave (⿻), or when a part is unknown or a single stroke.
+        A structure override with a non-IDS decomposition also makes it basic.
+        """
+        e = self.dictionary[char]
+        d = self.structures.get(char, {}).get("ids", e["decomposition"])
+        if d[0] not in ids.ARITY or d[0] == "⿻":
+            return True
+        if (e.get("etymology") or {}).get("type") == "pictographic":
+            return True
+        try:
+            tree = ids.parse(d)
+        except ValueError:
+            return True
+        return any(c == ids.UNKNOWN or (c in self.graphics and len(self.graphics[c]["strokes"]) == 1)
+                   for c in tree[1] if ids.is_leaf(c))
+
+    def _expand(self, ref, depth, seen):
+        """Replace leaf components shallower than depth by their own decomposition.
+
+        The component's strokes here are matched to its strokes as a character
+        by shape (medians normalised to their box), which tolerates a different
+        stroke order; a component whose stroke count or shapes do not line up
+        stays a leaf.
+        """
+        for path, leaf in ids.leaf_paths(ref.tree):
+            if len(path) >= depth or leaf == ids.UNKNOWN or leaf in seen or leaf not in self or self.basic(leaf):
+                continue
+            here = [i for i, p in enumerate(ref.paths) if p == path]
+            if not here:
+                continue
+            sub = self.reference(leaf, self.structures.get(leaf), depth - len(path), seen)
+            if ids.is_leaf(sub.tree):
+                continue
+            if sub.issues:
+                ref.notes.append(f"{leaf}: not expanded ({sub.issues[0]})")
+                continue
+            if len(sub.medians) != len(here):
+                ref.notes.append(f"{leaf}: not expanded ({len(here)} strokes here, {len(sub.medians)} alone)")
+                continue
+            order, cost = _match_strokes([ref.medians[i] for i in here], sub.medians)
+            if cost > 0.25:
+                ref.notes.append(f"{leaf}: not expanded (strokes differ, {cost:.2f})")
+                continue
+            ref.tree = ids.replace(ref.tree, path, sub.tree)
+            for i, j in zip(here, order):
+                ref.paths[i] = path + sub.paths[j]
+                if sub.sources[j] not in ("matches", "whole"):
+                    ref.sources[i] = sub.sources[j]
+            ref.notes += [f"{leaf}: {n}" for n in sub.notes]
+        ref.ids = ids.unparse(ref.tree)
+
+
+def _match_strokes(a, b, n=16):
+    """Best one-to-one match of stroke medians a to b, each set normalised to its
+    own box. Returns (index into b for each stroke of a, mean point distance)."""
+    def norm(ms):
+        pts = np.concatenate(ms)
+        lo, size = pts.min(0), max(np.ptp(pts, axis=0).max(), 1.0)
+        return [_resample_n((m - lo) / size, n) for m in ms]
+    a, b = norm(a), norm(b)
+    cost = np.array([[np.linalg.norm(x - y, axis=1).mean() for y in b] for x in a])
+    rows, cols = linear_sum_assignment(cost)
+    order = cols[np.argsort(rows)]
+    return order, float(cost[rows, cols].mean())
+
+
+def _resample_n(line, n):
+    seg = np.linalg.norm(np.diff(line, axis=0), axis=1)
+    t = np.concatenate([[0], np.cumsum(seg)])
+    if t[-1] == 0:
+        return np.repeat(line[:1], n, axis=0)
+    s = np.linspace(0, t[-1], n)
+    return np.column_stack([np.interp(s, t, line[:, 0]), np.interp(s, t, line[:, 1])])
 
 
 def _unknown_leaves(tree, path=()):
