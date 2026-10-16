@@ -129,7 +129,7 @@ def skeleton(ink, canvas):
 
 
 def register_parts(medians, groups, starts, skel, owned, fallbacks=None, schedule=((3, 10), (5, 10), (7, 10)),
-                   reg=2e-3, max_d=120.0, alpha=40.0, stiffness=300.0):
+                   reg=2e-3, max_d=120.0, alpha=40.0, stiffness=300.0, min_own=10):
     """One warp per part, refining an earlier registration.
 
     Each part (a group of stroke indices) starts from its own warp (starts:
@@ -140,14 +140,15 @@ def register_parts(medians, groups, starts, skel, owned, fallbacks=None, schedul
     displacement field then follows. Medians are drawn to the nearest ink
     anywhere, but only the part's own ink pulls back on them, so one part's
     medians are not dragged across another's ink. A part with too little ink
-    of its own keeps its fallback warp (default: its start).
+    of its own (fewer than min_own skeleton points) keeps its fallback warp
+    (default: its start).
     Returns one Warp per group.
     """
     fallbacks = fallbacks or starts
     everything = _Target(skel, alpha)
     out = []
     for idx, own, start, fallback in zip(groups, owned, starts, fallbacks):
-        if own.sum() < 10:
+        if own.sum() < min_own:
             out.append(fallback)
             continue
         mine = _Target(skel[own], alpha)

@@ -16,7 +16,7 @@ from paoding.geometry import Canvas, area, from_shapely, op, resample, to_shapel
 from paoding.mmah import MMAH
 from paoding.register import Affine, RBFField, Warp, fit_box, ink_box
 from paoding.segment import realize, segment
-from paoding.segment_bitmap import pixel_record, segment_bitmap
+from paoding.segment_bitmap import _mend_runs, pixel_record, segment_bitmap
 from paoding.target import BitmapTarget
 from paoding.target.outline import OutlineFont
 
@@ -381,6 +381,28 @@ def test_bitmap_segmentation_and_pixel_record(bitmap_font, mmah):
     np.testing.assert_array_equal(decoded, grid.flat)
     np.testing.assert_array_equal(overlay, grid.overlay)
     assert record.to_record(seg, bitmap_font)["pixels"] == pixels
+
+
+def test_mend_runs():
+    flat = np.full((5, 9), -1)
+    flat[2, :] = 0
+    flat[2, 3:5] = 1                 # a stretch of part 1 inside part 0's run
+    flat[:, 7] = 1                   # part 1's vertical crossing the run
+    out, broken = _mend_runs(flat)
+    assert (out[2, :7] == 0).all() and out[2, 7] == 1 and out[2, 8] == 0
+    assert broken == []
+    flat[2, 3:5] = 0
+    flat[2, :2] = 1                  # part 1 at the run's end: left, but reported
+    out, broken = _mend_runs(flat)
+    assert (out == flat).all() and broken == [(0, 1)]
+
+
+def test_bitmap_runs(bitmap_font, mmah):
+    # 目's 二 meets 口's sides: crossings, not part of the run to mend
+    seg = segment_bitmap("目", bitmap_font, mmah)
+    assert all(v["area"] > 0 for v in seg.metrics["nodes"].values())
+    # 阜: the long stroke of 十 is split with 㠯
+    assert segment_bitmap("阜", bitmap_font, mmah).status == "low"
 
 
 def test_testset_round_trip(tmp_path):

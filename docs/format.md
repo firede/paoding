@@ -136,6 +136,10 @@ weakest part's score, lowered for inferred structure:
   near the part's overlay ink — low when registration is off;
 - `purity`: share of the skeleton of a part's flat ink that is not clearly
   nearer another part's strokes — low when ink went to the wrong part;
+  For bitmap fonts, where every pixel goes to the nearest stroke, purity is
+  instead the share of a part's straight pixel runs (three or more pixels)
+  that no other part breaks into; a median may also stray half a pixel off
+  its ink for `median_in`;
 - `skel_cov`, `iou`: informative only; both are limited by the style gap
   between the reference (kaishu) and the target.
 

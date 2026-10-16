@@ -13,7 +13,8 @@ accordingly. The output is an annotation of the target font; MMAH geometry is
 used only as a guide and never written out.
 
 Status: early. Outline fonts split well at the top level and below
-(`--level 2` and deeper); the bitmap path is in progress.
+(`--level 2` and deeper). Bitmap fonts split well at 16 px (Unifont); at
+12 px more characters need review.
 
 ## Use
 

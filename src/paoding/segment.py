@@ -428,8 +428,12 @@ def _owner(face, lab, strokes, lines, widths, stroke_node, nodes):
 
 # ---------- scoring ----------
 
-def score(seg):
+def score(seg, slack=0.0, node_purity=None):
     """How well the registered reference explains the split, per node.
+
+    slack: distance a median may stray off its ink and still count as on it
+    (bitmaps: half a pixel). node_purity: per-node values replacing the
+    measured purity (bitmaps measure it on pixel runs).
 
     median_in: share of a node's median points (ends trimmed) on or near its overlay ink.
     purity: share of the skeleton of a node's flat ink not clearly nearer another node's medians.
@@ -453,7 +457,7 @@ def score(seg):
         # longer): judge the middle 70% of each median, with some slack
         core = np.concatenate([lines[i][int(len(lines[i]) * 0.15):max(int(len(lines[i]) * 0.85), 1) + 1] for i in idx])
         near = ndimage.distance_transform_edt(~overlay[n]) / canvas.px
-        inside = ndimage.map_coordinates(near, canvas.index(core), order=1) <= 0.25 * width
+        inside = ndimage.map_coordinates(near, canvas.index(core), order=1) <= max(0.25 * width, slack)
         sp = skel[flat[n][ys, xs]]
         if len(sp):
             own = cKDTree(pts).query(sp)[0]
@@ -464,6 +468,8 @@ def score(seg):
             purity = float(1 - ((own > 0.75 * width + 15) & (other < own - 0.5 * width)).mean())
         else:
             cov = purity = 0.0
+        if node_purity is not None:
+            purity = node_purity[n]
         refmask = canvas.fill([stroke_warps[i](ref.strokes[i]) for i in idx], rule="union")
         iou = (flat[n] & refmask).sum() / max((flat[n] | refmask).sum(), 1)
         per[ids.fmt(n)] = {"median_in": round(float(inside.mean()), 3), "purity": round(purity, 3), "skel_cov": round(cov, 3),
