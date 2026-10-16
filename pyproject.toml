@@ -1,0 +1,29 @@
+[project]
+name = "paoding"
+version = "0.1.0.dev0"
+description = "Font-agnostic hanzi component segmentation"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "fonttools>=4.50",
+    "numpy>=2.0",
+    "pillow>=10.0",
+    "scikit-image>=0.24",
+    "scipy>=1.13",
+    "shapely>=2.0",
+    "skia-pathops>=0.8",
+]
+
+[project.scripts]
+paoding = "paoding.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

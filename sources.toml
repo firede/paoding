@@ -1,0 +1,35 @@
+# Inputs, pinned. `paoding fetch` downloads each into data/<dest>, refuses a
+# file whose SHA-256 differs, and extracts the listed members of archives.
+# None of these files are part of this repository; see each license.
+
+[mmah-dictionary]
+url = "https://raw.githubusercontent.com/skishore/makemeahanzi/bddc96d41bef78427ed0e034e9f7e31d71fd1b92/dictionary.txt"
+sha256 = "744bb05d5b0742e9ee35c37791f94d56a173349b3367569e7ca11e510364d203"
+dest = "mmah/dictionary.txt"
+license = "LGPL-3.0 (Make Me a Hanzi dictionary data)"
+
+[mmah-graphics]
+url = "https://raw.githubusercontent.com/skishore/makemeahanzi/bddc96d41bef78427ed0e034e9f7e31d71fd1b92/graphics.txt"
+sha256 = "a28c478b5178e98f67f510b2d52fde08a69dc664654ef43498253b9b764d46ee"
+dest = "mmah/graphics.txt"
+license = "Arphic Public License (stroke data derived from AR PL fonts)"
+
+[source-han-sans-sc]
+url = "https://github.com/adobe-fonts/source-han-sans/releases/download/2.005R/09_SourceHanSansSC.zip"
+sha256 = "ef7364f7ac2564be1ae9c1d74276de2653fe38b73449070398c4fc0b7e032ff1"
+dest = "fonts/shs-sc.zip"
+extract = { "OTF/SimplifiedChinese/SourceHanSansSC-Regular.otf" = "fonts/SourceHanSansSC-Regular.otf", "LICENSE.txt" = "fonts/SourceHanSans-LICENSE.txt" }
+license = "OFL-1.1"
+
+[unifont]
+url = "https://unifoundry.com/pub/unifont/unifont-17.0.05/font-builds/unifont-17.0.05.hex.gz"
+sha256 = "2ae5311c8e123e9e85f5331cd012aa99757071df23243f1487fdbf8f3acd86be"
+dest = "fonts/unifont/unifont-17.0.05.hex.gz"
+license = "OFL-1.1 or GPL-2.0-or-later with font embedding exception"
+
+[fusion-pixel-12]
+url = "https://github.com/TakWolf/fusion-pixel-font/releases/download/2026.09.25/fusion-pixel-font-12px-proportional-bdf-v2026.09.25.zip"
+sha256 = "7cae5ea83b46086f146002d194d46bbba70ec7264ac3a309219f5ad491626cef"
+dest = "fonts/fusion/fp12.zip"
+extract = { "fusion-pixel-12px-proportional-zh_hans.bdf" = "fonts/fusion/fusion-pixel-12px-proportional-zh_hans.bdf", "OFL.txt" = "fonts/fusion/OFL.txt" }
+license = "OFL-1.1"
