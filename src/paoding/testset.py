@@ -97,14 +97,14 @@ def select(mmah, font, seed=1):
             continue
         have = sum(label in tag(c) for c in picked)
         take([c for c in sample if label in tag(c)], max(0, n - have), label)
-    return [(c, mmah.dictionary[c]["decomposition"], sorted(tag(c) | {label})) for c, label in picked.items()]
+    return [(c, sorted(tag(c) | {label})) for c, label in picked.items()]
 
 
 def write(rows, path):
     with open(path, "w", encoding="utf-8") as f:
-        f.write("# char\tids\ttags\n")
-        for c, d, t in rows:
-            f.write(f"{c}\t{d}\t{','.join(t)}\n")
+        f.write("# char\ttags\n")
+        for c, t in rows:
+            f.write(f"{c}\t{','.join(t)}\n")
 
 
 def read(path):

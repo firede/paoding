@@ -1,0 +1,51 @@
+# Font-independent fixes to the Make Me a Hanzi structure data.
+# Stroke indices follow MMAH's graphics.txt stroke order.
+
+# MMAH matches go by stroke order (first 6 to 衣); 衣 is drawn around 臼.
+[structure."裒"]
+ids = "⿻衣臼"
+matches = [[0], [0], [0], [1], [1], [0], [1], [1], [1], [1], [0], [0]]
+note = "衣: 0 1 2 5 10 11; 臼: 3 4 6 7 8 9"
+
+# The short top 一 was a part of its own; registration lost it. Join it to 弋.
+[structure."武"]
+ids = "⿹弋止"
+matches = [[0], [0], [1], [1], [1], [1], [0], [0]]
+
+# MMAH: ⿱⿻？大？ with the ？ parts left empty.
+[structure."奉"]
+ids = "⿱𡗗㐄"
+matches = [[0], [0], [0], [0], [0], [1], [1], [1]]
+
+# MMAH names a ？ part that gets no strokes; no better split on record.
+[structure."才"]
+ids = "才"
+
+[structure."芈"]
+ids = "芈"
+
+[structure."鹵"]
+ids = "鹵"
+
+[structure."叚"]
+ids = "叚"
+
+[structure."临"]
+ids = "临"
+
+# Basic components: MMAH's split is etymological rather than graphic
+# (斤 as 厂 + 下, 卑 as 白 + 十 though its 丿 crosses, 言 leaving 二口 as a part).
+[structure."言"]
+ids = "言"
+
+[structure."貝"]
+ids = "貝"
+
+[structure."欠"]
+ids = "欠"
+
+[structure."斤"]
+ids = "斤"
+
+[structure."卑"]
+ids = "卑"

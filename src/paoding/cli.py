@@ -63,7 +63,8 @@ def cmd_run(args):
         chars = list(dict.fromkeys(args.chars))
     else:
         chars = MMAH(args.mmah).chars()
-    init = (args.font, args.ppem, args.mmah, args.overrides, args.level, args.threshold)
+    override_paths = ([] if args.no_builtin_overrides else [ov.BUILTIN]) + args.overrides
+    init = (args.font, args.ppem, args.mmah, override_paths, args.level, args.threshold)
     _init(*init)
     font, mmah = _worker["font"], _worker["mmah"]
     excluded = {c for c, g in _worker["overrides"]["glyph"].items() if g.get("status") == "exclude"}
@@ -78,7 +79,7 @@ def cmd_run(args):
 
     failed = [r for r in results if r.error]
     ok = [r for r in results if not r.error]
-    params = {"level": args.level, "ppem": args.ppem, "threshold": args.threshold, "overrides": [Path(p).name for p in args.overrides]}
+    params = {"level": args.level, "ppem": args.ppem, "threshold": args.threshold, "overrides": [("paoding:" if p == ov.BUILTIN else "") + Path(p).name for p in override_paths]}
     refs = [Path(args.mmah) / "dictionary.txt", Path(args.mmah) / "graphics.txt"]
     with open(out / "records.jsonl", "w", encoding="utf-8") as f:
         f.write(json.dumps(record.header(font, refs, params), ensure_ascii=False) + "\n")
@@ -133,6 +134,8 @@ def main(argv=None):
     g.add_argument("--testset", help="test set file (char<TAB>...)")
     r.add_argument("--level", type=int, default=1)
     r.add_argument("--overrides", action="append", default=[], help="override TOML; repeatable")
+    r.add_argument("--no-builtin-overrides", action="store_true",
+                   help="skip the structure corrections that ship with paoding")
     r.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
     r.add_argument("--out", default="out/run")
     r.add_argument("--jobs", type=int, default=1)

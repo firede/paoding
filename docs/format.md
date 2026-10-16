@@ -1,48 +1,43 @@
-# Annotation format
+# 标注格式
 
-`paoding run` writes `records.jsonl`: one JSON object per line. The first line
-is a header; each following line describes one character of one target font.
+`paoding run` 写出 `records.jsonl`，每行一个 JSON 对象。第一行是头部，之后每行描述目标字体中的一个字。
 
-Records hold no glyph outlines and no reference (Make Me a Hanzi) geometry.
-They refer to the target font by glyph name and contour index, and add only
-cut lines and labelled points in the font's own units. To get outlines, rebuild
-them from the record and your copy of the font (`paoding.record.realize_record`).
+记录里没有字形轮廓，也没有参照数据（Make Me a Hanzi）的几何。它们通过字形名和轮廓序号指向目标字体，只额外记录切线和带标签的点，坐标都用字体自己的单位。要得到轮廓，用记录和你手上的那份字体重建（`paoding.record.realize_record`）。
 
-## Header
+## 头部
 
 ```json
 {"kind": "header", "format": 1, "tool": "paoding 0.1.0.dev0",
  "font": {"file": "SourceHanSansSC-Regular.otf", "sha256": "f1d86111…"},
  "reference": [{"file": "dictionary.txt", "sha256": "…"}, {"file": "graphics.txt", "sha256": "…"}],
- "params": {"level": 1, "ppem": null, "threshold": 0.85, "overrides": []}}
+ "params": {"level": 1, "ppem": null, "threshold": 0.85, "overrides": ["paoding:structure.toml"]}}
 ```
 
-A record is only valid for the exact font file named by the hash: contour
-indices and coordinates change between font versions.
+记录只对哈希值所指的那个字体文件有效：不同版本的字体，轮廓序号和坐标都会变。`overrides` 列出生效的覆盖文件，`paoding:` 开头的是工具自带的那份。
 
-## Node paths
+## 节点路径
 
-Parts are addressed by their path in the IDS tree, written with dots:
-`""` is the whole character, `"0"` the first top-level part, `"1.0"` the first
-part of the second. For `照 ⿱⿰日召灬`, `"0"` is 昭 and `"0.1"` is 召.
-`level` says how deep the split goes; level 1 is the top-level split.
+部件用它在 IDS 树中的路径来指称，以点分隔：
 
-`ids` is the tree the paths refer to. Make Me a Hanzi decomposes a character
-only a level or two deep (照 is `⿱昭灬`); below level 1, parts that are
-characters themselves are expanded from their own entries (昭 is `⿰日召`), so
-at level 3 照 is `⿱⿰日⿱刀口灬`. Expansion stops at basic components: those
-MMAH calls pictographic (日, 木, 口), whose parts interweave (`⿻`), or that
-have a single stroke or an unknown part among their parts. A structure override
-can change where it stops. A part whose strokes do not line up with its own
-entry (another stroke count, or other shapes) also stays whole. A character
-whose MMAH parts are all unknown (門 is `⿰？？`) is not split at all; its
-`ids` is `？`.
+- `""`：整个字；
+- `"0"`：第一个顶层部件；
+- `"1.0"`：第二个顶层部件的第一个子部件。
 
-`nodes` lists the parts present at that level, in **stacking order, bottom
-first** (IDS order unless overridden). A stroke whose reference path is
-shorter than the level keeps its shorter node.
+例如 `照 ⿱⿰日召灬` 中，`"0"` 是 昭，`"0.1"` 是 召。`level` 表示切分的深度，第 1 层是顶层拆分。
 
-## Character record (outline fonts)
+`ids` 就是路径所指的那棵树。Make Me a Hanzi 只把一个字拆一两层（照 是 `⿱昭灬`）；第 1 层以下，本身也是字的部件会按它自己的条目展开（昭 是 `⿰日召`），所以在第 3 层，照 是 `⿱⿰日⿱刀口灬`。
+
+展开到基础部件为止。以下几类算基础部件，不再下拆：
+
+- MMAH 标为象形的（日、木、口）；
+- 部件相互穿插的（`⿻`）；
+- 含有单笔部件或未知部件（`？`）的。
+
+结构覆盖可以改变展开在哪里停下，自带的修正就把 言、貝、欠、斤、卑 定为基础部件。一个部件的笔画如果和它自己的条目对不上（笔画数不同，或形状差太多），也保持整体。MMAH 的部件全部未知的字（如 門 是 `⿰？？`）整字不拆，`ids` 为 `？`。
+
+`nodes` 列出该层实际出现的部件，按**叠放顺序、自下而上**排列（默认为 IDS 顺序，可用覆盖改）。如果某一笔的参照路径比所切的层级短，它保留那个较短的节点。
+
+## 字记录（矢量字体）
 
 ```json
 {"char": "申", "codepoint": "U+7533", "glyph": "cid27077", "level": 1,
@@ -58,58 +53,41 @@ shorter than the level keeps its shorter node.
  "metrics": {…}}
 ```
 
-A **unit** is a connected piece of the glyph's ink: an outer boundary with its
-holes. `contours` lists the glyph's original contour indices that make it up
-(as a pen sees them via `glyphSet[glyph].draw`). Fonts with overlapping
-contours work too: overlapping contours share a unit.
+**单元**是字形墨迹中连通的一块：一条外轮廓连同它的孔洞。`contours` 列出组成它的原始轮廓序号（即通过 `glyphSet[glyph].draw` 由画笔看到的顺序）。轮廓互相重叠的字体同样适用：重叠的轮廓归入同一个单元。
 
-A unit either belongs wholly to one part:
+一个单元要么整个属于某个部件：
 
 ```json
-{"contours": [3], "node": "1"}            // add "override": true when forced by an override
+{"contours": [3], "node": "1"}            // 由覆盖强制指定时另加 "override": true
 ```
 
-or is cut. `cuts` are polylines in font units, each crossing the unit from
-one side of its outline to the other. They split the unit into faces; each
-entry of `faces` labels the face containing its point `at`:
+要么被切开。`cuts` 是以字体单位表示的折线，每条都从单元轮廓的一侧穿到另一侧，把单元分成若干面；`faces` 的每一项给包含其点 `at` 的那个面加标签：
 
-- `nodes`: every part whose **overlay** includes the face;
-- `flat`: the one part that owns the face in the **flat** view;
-- `rule` (shared faces only): why `flat` won —
-  `through` (its stroke passes through the junction, the other ends in it),
-  `crossing` (both pass; the part higher in the stacking order wins),
-  `corner` (neither passes; the part whose strokes run further inside wins,
-  then the stroke drawn first), or `override`.
+- `nodes`：在**叠加视图**中包含这个面的所有部件；
+- `flat`：在**拍平视图**中拥有这个面的那一个部件；
+- `rule`（仅共有的面）：`flat` 为什么胜出：
+  - `through`：它的笔画穿过交接处，另一笔止于此；
+  - `crossing`：两笔都穿过，叠放在上层的部件胜出；
+  - `corner`：两笔都不穿过，笔画伸进这个面更深的部件胜出，相同时取先写的笔画；
+  - `override`：由覆盖指定。
 
-### Two views
+### 两种视图
 
-- **Flat**: every face goes to its `flat` part. The parts tile the glyph
-  exactly, without overlap. Use it for flat colouring, area statistics, or
-  anything that paints each point once.
-- **Overlay**: every face goes to all its `nodes`. Each part is complete on its
-  own, so it can be shown alone (animation, highlighting, part search
-  thumbnails); parts overlap at junctions. Painting overlay parts opaque in
-  stacking order looks the same as the flat view except where a `through` or
-  `corner` face is owned by a lower part.
+- **拍平视图**：每个面交给它的 `flat` 部件。各部件恰好铺满字形，没有重叠。适合平面着色、面积统计，或任何每个点只画一次的用途。
+- **叠加视图**：每个面交给它的全部 `nodes`。每个部件自身完整，可以单独展示（动画、高亮、按部件检索的缩略图），部件在交接处会重叠。按叠放顺序不透明地绘制叠加视图的各部件，看起来和拍平视图一样，只是 `through` 或 `corner` 的面若归下层部件所有，会有差别。
 
-At a T-junction the overlay extends the ending stroke into the stroke it meets,
-up to where the reference stroke ends; the target glyph itself cannot tell how
-deep that is, so treat the depth as approximate.
+在 T 形交接处，叠加视图会把止于此的那一笔延伸进它所接的笔画，直到参照笔画结束的位置。目标字形本身无法告诉我们这一段该有多深，所以这个深度只是近似值。
 
-### Rebuilding the pieces
+### 重建各部件
 
-1. Unit outline: the union of its `contours`, overlaps removed.
-2. Flatten the outline, add the cut lines (extended a few units past their
-   ends so they cross it), and polygonize: the result is the unit's faces.
-3. Label each face by the `faces` point inside it (nearest point if none).
-4. For exact curves, clip the unit outline with each face grown by a few units
-   minus all other faces. The cut edges are straight segments; everything else
-   keeps the font's own curves.
+1. 单元轮廓：它的 `contours` 的并集，去掉重叠。
+2. 把轮廓展平，加上切线（两端各延长几个单位，确保穿过轮廓），再做多边形化，得到单元的各个面。
+3. 用落在面内的 `faces` 点给每个面加标签（没有则取最近的点）。
+4. 要得到精确的曲线：用每个面（外扩几个单位、再减去其他所有面）去裁剪单元轮廓。切口是直线段，其余部分保留字体原有的曲线。
 
-`paoding.record.realize_record(record, font)` does this and returns
-`{"overlay": {node: Path}, "flat": {node: Path}}` (skia-pathops, font units).
+`paoding.record.realize_record(record, font)` 完成以上步骤，返回 `{"overlay": {node: Path}, "flat": {node: Path}}`（skia-pathops 路径，字体单位）。
 
-## Character record (bitmap fonts)
+## 字记录（位图字体）
 
 ```json
 {"char": "好", "glyph": "U+597D", …,
@@ -121,45 +99,33 @@ deep that is, so treat the depth as approximate.
                        "b": {"nodes": ["1"], "flat": "1"}}}}
 ```
 
-`rows` covers the glyph's bitmap from the top row down; `left` and `top` place
-column 0 and row 0 relative to the origin and baseline (pixels, y up). `.` is
-no ink; a letter names the overlay set and flat owner of that pixel (a
-junction pixel can carry a letter whose `nodes` lists several parts).
+`rows` 从上到下覆盖字形的位图；`left` 和 `top` 给出第 0 列、第 0 行相对原点和基线的位置（以像素为单位，y 向上）。`.` 表示无墨迹；字母指明该像素的叠加集合和拍平归属，交接处的像素可以对应一个 `nodes` 含多个部件的字母。
 
-## Status and confidence
+## 状态与置信度
 
-`status` is `auto` when `confidence` reaches the threshold, `low` otherwise,
-or `verified` / `exclude` when an override says so. `confidence` is the
-weakest part's score, lowered for inferred structure:
+`status` 在 `confidence` 达到阈值时为 `auto`，否则为 `low`；覆盖可以把它设为 `verified` 或 `exclude`。`confidence` 取最弱的部件的分数，结构是推断而来时再打折扣。每个部件的分数是以下两项中较低的一项：
 
-- `median_in`: share of a part's reference medians (ends trimmed) lying on or
-  near the part's overlay ink — low when registration is off;
-- `purity`: share of the skeleton of a part's flat ink that is not clearly
-  nearer another part's strokes — low when ink went to the wrong part;
-  For bitmap fonts, where every pixel goes to the nearest stroke, purity is
-  instead the share of a part's straight pixel runs (three or more pixels)
-  that no other part breaks into; a median may also stray half a pixel off
-  its ink for `median_in`;
-- `skel_cov`, `iou`: informative only; both are limited by the style gap
-  between the reference (kaishu) and the target.
+- `median_in`：部件的参照中线（去掉两端）有多少落在或贴近它的叠加墨迹上。配准跑偏时会偏低。位图字体允许中线偏离墨迹半个像素。
+- `purity`：部件的拍平墨迹，其骨架有多少不明显更靠近别的部件的笔画。墨迹分错部件时会偏低。位图字体的每个像素都分给最近的笔画，这项指标按构造恒为 1，所以改为：部件的横竖像素串（三个像素及以上）中，没有被别的部件截断的比例。
 
-Penalties: ×0.95 for crossing/corner junctions, ×0.95 for strokes whose part
-was inferred (not from MMAH matches or an override), ×0.5 when a part of the decomposition has no strokes, 0 when a
-part ends up with no ink.
+另有两项仅供参考：`skel_cov` 和 `iou`。两者都受参照（楷体）与目标字体之间风格差异的限制。
 
-## Overrides
+扣分规则：
 
-See `paoding.overrides` for the TOML layout: `[structure."<char>"]` fixes the
-decomposition or matches for every font; `[glyph."<char>"]` sets, for one font,
-the stacking order, whole-unit assignments by contour index, flat owners of
-shared faces by point, and a review status.
+- 有交叉（crossing）或转角（corner）交接时 ×0.95；
+- 有笔画的归属是推断的（既不来自 MMAH 的匹配，也不来自覆盖）时 ×0.95；
+- 拆法中有部件分不到笔画时 ×0.5；
+- 有部件最终没有墨迹时直接为 0。
 
-## Provenance and licensing
+## 覆盖
 
-- Contour indices and coordinates describe the target font; the font's
-  license applies to anything rebuilt from it (for Source Han Sans: OFL, and
-  derived fonts may not use the reserved name "Source").
-- `ids`, `nodes` and the node paths come from Make Me a Hanzi's
-  `dictionary.txt` (LGPL). Cut positions and face labels are computed with the
-  help of its `graphics.txt` (Arphic Public License) but contain none of its
-  outlines or medians.
+TOML 格式见 `paoding.overrides`：
+
+- `[structure."<字>"]`：对所有字体修正拆法或笔画归属；
+- `[glyph."<字>"]`：只对某一套字体设定叠放顺序、按轮廓序号整体指定单元归属、按点指定共有面的拍平归属，以及审核状态。
+
+## 来源与许可
+
+- 轮廓序号和坐标描述的是目标字体，由它重建出的任何东西都受该字体许可约束。例如思源黑体是 OFL，由它衍生的字体不能使用保留名 “Source”。
+- `ids`、`nodes` 和节点路径来自 Make Me a Hanzi 的 `dictionary.txt`（LGPL-3.0），经展开和修正。发布数据集时请注明这部分按 LGPL-3.0 提供。
+- 切线位置和面的标签是借助 MMAH 的 `graphics.txt`（Arphic Public License）计算出来的，但不包含它的任何轮廓或中线。

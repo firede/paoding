@@ -15,6 +15,11 @@
 """
 
 import tomllib
+from pathlib import Path
+
+# Corrections to the MMAH structure data that ship with paoding, loaded first
+# (later files win per key).
+BUILTIN = Path(__file__).with_name("structure.toml")
 
 
 def load(paths):

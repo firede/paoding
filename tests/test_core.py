@@ -407,10 +407,9 @@ def test_bitmap_runs(bitmap_font, mmah):
 
 def test_testset_round_trip(tmp_path):
     path = tmp_path / "set.tsv"
-    rows = [("好", "⿰女子", ["⿰", "common"]), ("司", "⿹？口", ["inferred"]),
-            ("輿", "？", [])]
+    rows = [("好", ["⿰", "common"]), ("司", ["inferred"]), ("輿", [])]
     testset.write(rows, path)
-    assert path.read_text(encoding="utf-8").startswith("# char\tids\ttags\n")
+    assert path.read_text(encoding="utf-8").startswith("# char\ttags\n")
     assert testset.read(path) == [row[0] for row in rows]
     testset.write([], path)
     assert testset.read(path) == []
@@ -483,3 +482,11 @@ def test_cli_run(tmp_path, monkeypatch, outline_font, mmah):
     assert rows[0]["font"]["file"] == Path(outline_font.path).name
     assert [r["char"] for r in rows[1:]] == ["好", "申"]
     assert all("units" in r and r["nodes"] for r in rows[1:])
+
+
+def test_builtin_overrides(mmah):
+    loaded = overrides.load([overrides.BUILTIN])["structure"]
+    for char, entry in loaded.items():
+        ref = mmah.reference(char, entry)
+        assert not ref.issues, (char, ref.issues)
+        assert len(ref.paths) == len(ref.strokes)

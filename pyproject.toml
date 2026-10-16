@@ -1,7 +1,7 @@
 [project]
 name = "paoding"
 version = "0.1.0.dev0"
-description = "Font-agnostic hanzi component segmentation"
+description = "与字体无关的汉字部件切分"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
