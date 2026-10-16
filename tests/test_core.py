@@ -15,7 +15,7 @@ from paoding import cli, ids, overrides, record, target, testset
 from paoding.geometry import Canvas, area, from_shapely, op, resample, to_shapely
 from paoding.mmah import MMAH
 from paoding.register import Affine, RBFField, Warp, fit_box, ink_box
-from paoding.segment import segment
+from paoding.segment import realize, segment
 from paoding.segment_bitmap import pixel_record, segment_bitmap
 from paoding.target import BitmapTarget
 from paoding.target.outline import OutlineFont
@@ -50,12 +50,16 @@ def bitmap_font():
     return BitmapTarget(require_file("data/fonts/unifont/unifont-17.0.05.hex"))
 
 
+# 克路希勤咋方夕: cut units whose cut lines once failed to separate the faces
+OUTLINE_CHARS = "申山我京好国克路希勤咋方夕"
+
+
 @pytest.fixture(scope="session")
 def outline_segments(outline_font, mmah):
-    return {char: segment(char, outline_font, mmah) for char in "申山我京好国"}
+    return {char: segment(char, outline_font, mmah) for char in OUTLINE_CHARS}
 
 
-@pytest.fixture(scope="session", params=list("申山我京好国"))
+@pytest.fixture(scope="session", params=list(OUTLINE_CHARS))
 def outline_seg(request, outline_segments):
     return outline_segments[request.param]
 
@@ -216,6 +220,14 @@ def test_overlay_contains_flat(outline_seg):
     for node in outline_seg.nodes:
         assert area(overlay[node]) + 0.01 >= area(flat[node])
         assert area(op(flat[node], overlay[node], "DIFFERENCE")) <= 0.01
+
+
+def test_cut_faces_all_realized(outline_seg):
+    for unit in outline_seg.units:
+        if unit.method != "cut":
+            continue
+        pieces = realize(unit.path, unit.cuts, unit.faces)
+        assert all(area(p) > 0 for p in pieces), (outline_seg.char, [f.nodes for f in unit.faces])
 
 
 def test_record_json_round_trip(outline_seg, outline_font):

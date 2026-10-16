@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pathops
 import shapely
+import shapely.ops
 from scipy import ndimage
 from skimage.morphology import skeletonize
 from scipy.spatial import cKDTree
@@ -115,20 +116,29 @@ def realize(unit_path, cuts, faces, extend=2.0, pad=3.0):
         inside = np.flatnonzero(shapely.contains(c, pts))
         owner.append(int(inside[0]) if len(inside) else int(np.argmin(shapely.distance(c, pts))))
     pieces = [pathops.Path() for _ in faces]
+    taken = shapely.Polygon()
     for i, c in enumerate(cells):
         others = shapely.unary_union([d for j, d in enumerate(cells) if j != i])
-        clip = c.buffer(pad, join_style="mitre").difference(others)
+        # the grown margins of neighbouring cells meet beyond the flattened outline: first come, first served
+        clip = c.buffer(pad, join_style="mitre").difference(others).difference(taken)
+        taken = taken.union(clip)
         piece = op(unit_path, from_shapely(clip), "INTERSECTION")
         pieces[owner[i]] = op(pieces[owner[i]], piece, "UNION")
     return pieces
 
 
 def _extend(line, d):
+    """Extend a polyline by d at both ends, along its direction over the last unit or more."""
     if len(line) < 2:
         return line
-    a = line[0] + d * _unit(line[0] - line[1])
-    b = line[-1] + d * _unit(line[-1] - line[-2])
-    return np.vstack([a, line, b])
+    return np.vstack([line[0] + d * _heading(line), line, line[-1] + d * _heading(line[::-1])])
+
+
+def _heading(line, back=1.0):
+    """Unit vector out of the polyline's first point, measured from the first point at least `back` away."""
+    far = np.linalg.norm(line - line[0], axis=1) >= back
+    ref = line[np.argmax(far)] if far.any() else line[-1]
+    return _unit(line[0] - ref)
 
 
 def _unit(v):
@@ -216,11 +226,11 @@ def _cut(res, unit, present, seg, flat_overrides, min_face=25.0):
     nodes = seg.nodes
     shape = to_shapely(unit.path, steps=16)
     strokes = [i for i in range(len(lines)) if stroke_node[i] in present]
-    bands = {i: band(lines[i], widths[i]).intersection(shape) for i in strokes}
+    bands = {i: _areal(band(lines[i], widths[i]).intersection(shape)) for i in strokes}
     region = {}
     for i in strokes:
         k = stroke_node[i]
-        region[k] = bands[i] if k not in region else region[k].union(bands[i])
+        region[k] = bands[i] if k not in region else _areal(region[k].union(bands[i]))
     # ink outside every band joins the region it borders most
     covered = shapely.unary_union(list(region.values()))
     for blob in polygons(shape.difference(covered)):
@@ -229,63 +239,127 @@ def _cut(res, unit, present, seg, flat_overrides, min_face=25.0):
         if contact[k] == 0:
             r, c = np.round(dbg["canvas"].index(np.array(blob.representative_point().coords))).astype(int)[:, 0]
             k = int(dbg["nearest"][r, c])
-        region[k] = region[k].union(blob)
+        region[k] = _areal(region[k].union(blob))
 
-    noded = shapely.unary_union([shape.boundary, *[g.boundary for g in region.values()]])
-    faces = [f for f in polygons(shapely.GeometryCollection(list(shapely.polygonize(shapely.get_parts(noded)).geoms)))
-             if shape.contains(f.representative_point()) and f.area > 1e-3]
+    # faces: one arrangement of the outline and all region boundaries, snap-rounded
+    # together so nearly coincident edges become one; every segment then knows
+    # exactly which faces it separates
+    outline = shape.boundary
+    linework = shapely.unary_union([outline, *[g.boundary for g in region.values()]], grid_size=GRID)
+    inside = shapely.set_precision(shape, GRID)
+    faces = [f for f in polygons(shapely.GeometryCollection(list(shapely.polygonize(shapely.get_parts(linework)).geoms)))
+             if f.area > 1e-3 and inside.contains(f.representative_point())]
+    keys = sorted(region)
     labels = []
     for f in faces:
-        p = f.representative_point()
-        lab = tuple(k for k in sorted(region) if region[k].buffer(1e-6).contains(p))
+        lab = tuple(k for k in keys if region[k].intersection(f).area > 0.5 * f.area)
         if not lab:
+            p = f.representative_point()
             r, c = np.round(dbg["canvas"].index(np.array([[p.x, p.y]]))).astype(int)
             lab = (int(dbg["nearest"][r[0], c[0]]),)
         labels.append(lab)
+    sides = {}                          # segment -> the faces either side of it
+    for i, f in enumerate(faces):
+        for seg_key in _segments(f):
+            sides.setdefault(seg_key, []).append(i)
+    border = [{} for _ in faces]        # face -> {neighbour: shared border length}
+    for seg_key, fs in sides.items():
+        if len(fs) == 2:
+            a, b = fs
+            border[a][b] = border[b][a] = border[a].get(b, 0.0) + _seg_length(seg_key)
     # tiny faces join the neighbour they share the most border with
     for i, f in enumerate(faces):
         if f.area >= min_face:
             continue
-        contact = [(f.boundary.intersection(g.boundary).length, j) for j, g in enumerate(faces) if j != i and faces[j].area >= min_face]
+        contact = [(n, j) for j, n in border[i].items() if faces[j].area >= min_face]
         if contact:
             labels[i] = labels[max(contact)[1]]
 
-    out_faces = []
+    out = []
     for f, lab in zip(faces, labels):
         p = f.representative_point()
         node_set = tuple(nodes[k] for k in lab)
         if len(lab) == 1:
-            out_faces.append((f, Face((p.x, p.y), node_set, node_set[0])))
+            out.append(Face((p.x, p.y), node_set, node_set[0]))
             continue
         owner, rule = _owner(f, lab, strokes, lines, widths, stroke_node, nodes)
         for point, node in flat_overrides:
             if node in node_set and f.buffer(1.0).contains(shapely.Point(*point)):
                 owner, rule = node, "override"
-        out_faces.append((f, Face((p.x, p.y), node_set, owner, rule)))
+        out.append(Face((p.x, p.y), node_set, owner, rule))
+    sig = [(face.nodes, face.flat) for face in out]
 
-    # merge faces with identical labels that touch; cut lines separate the rest
-    merged = []
-    for f, face in out_faces:
-        for m in merged:
-            if (m[1].nodes, m[1].flat) == (face.nodes, face.flat) and m[0].buffer(1e-6).intersects(f):
-                m[0] = m[0].union(f)
-                break
-        else:
-            merged.append([f, face])
-    cuts = []
-    for a in range(len(merged)):
-        for b in range(a + 1, len(merged)):
-            shared = merged[a][0].boundary.intersection(merged[b][0].boundary)
-            for line in shapely.get_parts(shapely.line_merge(shapely.unary_union(
-                    [g for g in shapely.get_parts(shared) if g.geom_type in ("LineString", "MultiLineString")]))
-                    if not shared.is_empty else shapely.GeometryCollection()):
-                if line.length > 1:
-                    cuts.append(np.array(line.simplify(0.5).coords))
-    res.cuts = cuts
+    # faces with the same labels that share an edge are one face; cut lines separate the rest
+    group = list(range(len(faces)))
+    def find(i):
+        while group[i] != i:
+            group[i] = group[group[i]]
+            i = group[i]
+        return i
+    for a in range(len(faces)):
+        for b in border[a]:
+            if sig[a] == sig[b]:
+                group[find(a)] = find(b)
+    members = {}
+    for i in range(len(faces)):
+        members.setdefault(find(i), []).append(i)
+    merged = [[shapely.unary_union([faces[i] for i in m], grid_size=GRID), out[m[0]]] for m in members.values()]
+    sep = [shapely.LineString(np.array(seg_key) * GRID) for seg_key, fs in sides.items()
+           if len(fs) == 2 and sig[fs[0]] != sig[fs[1]]]
+    merged_lines = shapely.get_parts(shapely.line_merge(shapely.unary_union(sep))) if sep else []
+    res.cuts = [_to_outline(np.array(piece.simplify(0.5).coords), outline)
+                for line in merged_lines for piece in _split_at_outline(line, inside.boundary)]
+    dbg.setdefault("faces", []).append((inside, merged))
     res.faces = []
     for g, face in merged:
         p = g.representative_point()
         res.faces.append(Face((round(p.x, 1), round(p.y, 1)), face.nodes, face.flat, face.rule))
+
+
+GRID = 0.5    # snap-rounding grid, em units (1/1000 em): far below anything visible
+
+
+def _segments(poly):
+    """Boundary segments of a polygon on the GRID lattice, as order-free integer keys."""
+    for ring in (poly.exterior, *poly.interiors):
+        c = np.round(np.asarray(ring.coords) / GRID).astype(int)
+        for a, b in zip(map(tuple, c[:-1]), map(tuple, c[1:])):
+            if a != b:
+                yield min(a, b), max(a, b)
+
+
+def _seg_length(seg_key):
+    (x0, y0), (x1, y1) = seg_key
+    return GRID * float(np.hypot(x1 - x0, y1 - y0))
+
+
+def _split_at_outline(line, outline, touch=0.6):
+    """Split a polyline at inner vertices touching the outline: each piece then
+    runs outline to outline (or junction), never along a hairline gap."""
+    pts = np.array(line.coords)
+    near = shapely.distance(shapely.points(pts), outline) < touch
+    pieces, start = [], 0
+    for i in range(1, len(pts) - 1):
+        if near[i]:
+            pieces.append(shapely.LineString(pts[start:i + 1]))
+            start = i
+    pieces.append(shapely.LineString(pts[start:]))
+    return [p for p in pieces if p.length > 0]
+
+
+def _to_outline(cut, outline, reach=1.5):
+    """Run cut ends lying just inside the outline onto it, so no hairline gap joins two faces."""
+    ends = []
+    for p in (cut[0], cut[-1]):
+        q = shapely.ops.nearest_points(outline, shapely.Point(p))[0]
+        d = q.distance(shapely.Point(p))
+        ends.append(np.array([[q.x, q.y]]) if 0.01 < d < reach else np.empty((0, 2)))
+    return np.vstack([ends[0], cut, ends[1]])
+
+
+def _areal(geom):
+    """Keep only the polygonal part of a shapely result (drop slivers of lines and points)."""
+    return shapely.unary_union(polygons(geom))
 
 
 def _owner(face, lab, strokes, lines, widths, stroke_node, nodes):
@@ -296,8 +370,16 @@ def _owner(face, lab, strokes, lines, widths, stroke_node, nodes):
         return nodes[through[0]], "through"
     if len(through) > 1:
         return nodes[max(through)], "crossing"
-    first = min(involved, default=None)
-    return (nodes[stroke_node[first]] if first is not None else nodes[max(lab)]), "corner"
+    if not involved:
+        return nodes[max(lab)], "corner"
+    # neither passes: the part whose strokes run furthest inside wins, then the earlier stroke
+    run = {}
+    for i in involved:
+        k = stroke_node[i]
+        run[k] = run.get(k, 0.0) + shapely.LineString(lines[i]).intersection(face).length
+    first = {k: min(i for i in involved if stroke_node[i] == k) for k in run}
+    best = max(run, key=lambda k: (round(run[k] / 10), -first[k]))
+    return nodes[best], "corner"
 
 
 # ---------- scoring ----------

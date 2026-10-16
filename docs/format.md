@@ -67,7 +67,8 @@ entry of `faces` labels the face containing its point `at`:
 - `rule` (shared faces only): why `flat` won —
   `through` (its stroke passes through the junction, the other ends in it),
   `crossing` (both pass; the part higher in the stacking order wins),
-  `corner` (neither passes; the stroke drawn first wins), or `override`.
+  `corner` (neither passes; the part whose strokes run further inside wins,
+  then the stroke drawn first), or `override`.
 
 ### Two views
 
