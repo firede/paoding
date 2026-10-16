@@ -473,7 +473,7 @@ def score(seg):
     rules = [f.rule for u in seg.units for f in u.faces if f.rule]
     if any(r in ("crossing", "corner") for r in rules):
         conf *= 0.95
-    if any(s not in ("matches", "whole") for s in ref.sources):
+    if any(s not in ("matches", "whole", "override") for s in ref.sources):
         conf *= 0.95
     if any("has no strokes" in i for i in ref.issues):
         conf *= 0.5

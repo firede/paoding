@@ -94,6 +94,11 @@ class MMAH:
                 ref.tree = ids.parse(decomposition)
             except ValueError as err:
                 ref.issues.append(str(err))
+        if ref.tree is not None and all(leaf == ids.UNKNOWN for _, leaf in ids.leaf_paths(ref.tree)):
+            # MMAH saw parts but named none of them: nothing to split by
+            ref.notes.append(f"{decomposition}: no known parts, kept whole")
+            ref.tree, ref.ids = None, ids.UNKNOWN
+            decomposition = ids.UNKNOWN
         if ref.tree is None:
             # whole character (no decomposition, or one we cannot read)
             ref.tree = decomposition

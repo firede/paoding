@@ -170,6 +170,13 @@ def test_reference_basic_components(mmah):
     assert not any(mmah.basic(c) for c in "召昭吂")
 
 
+def test_reference_unknown_parts_kept_whole(mmah):
+    # 門 is ⿰？？ in MMAH: no named part, so nothing to split by
+    ref = mmah.reference("門")
+    assert ids.is_leaf(ref.tree) and ref.ids == ids.UNKNOWN
+    assert set(ref.paths) == {()} and not ref.issues and ref.notes
+
+
 def test_level_two_nested_split(outline_font, mmah):
     seg = segment("圈", outline_font, mmah, level=2)
     assert [ids.fmt(n) for n in seg.nodes] == ["0", "1.0", "1.1"]

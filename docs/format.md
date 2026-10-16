@@ -34,7 +34,9 @@ at level 3 照 is `⿱⿰日⿱刀口灬`. Expansion stops at basic components: 
 MMAH calls pictographic (日, 木, 口), whose parts interweave (`⿻`), or that
 have a single stroke or an unknown part among their parts. A structure override
 can change where it stops. A part whose strokes do not line up with its own
-entry (another stroke count, or other shapes) also stays whole.
+entry (another stroke count, or other shapes) also stays whole. A character
+whose MMAH parts are all unknown (門 is `⿰？？`) is not split at all; its
+`ids` is `？`.
 
 `nodes` lists the parts present at that level, in **stacking order, bottom
 first** (IDS order unless overridden). A stroke whose reference path is
@@ -138,13 +140,13 @@ weakest part's score, lowered for inferred structure:
   between the reference (kaishu) and the target.
 
 Penalties: ×0.95 for crossing/corner junctions, ×0.95 for strokes whose part
-was inferred, ×0.5 when a part of the decomposition has no strokes, 0 when a
+was inferred (not from MMAH matches or an override), ×0.5 when a part of the decomposition has no strokes, 0 when a
 part ends up with no ink.
 
 ## Overrides
 
-See `paoding.overrides` for the TOML layout: `[structure.<char>]` fixes the
-decomposition or matches for every font; `[glyph.<char>]` sets, for one font,
+See `paoding.overrides` for the TOML layout: `[structure."<char>"]` fixes the
+decomposition or matches for every font; `[glyph."<char>"]` sets, for one font,
 the stacking order, whole-unit assignments by contour index, flat owners of
 shared faces by point, and a review status.
 
