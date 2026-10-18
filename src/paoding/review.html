@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>paoding review</title>
+<style>
+:root{--bg:#fff;--fg:#1d1d1f;--muted:#6e6e73;--card:#f5f5f7;--line:#d2d2d7;--ghost:#cdcdd2;--accent:#2478d6;--sel:#e0399b;--bad:#c62828;--good:#2e7d32}
+@media (prefers-color-scheme:dark){:root{--bg:#161618;--fg:#f2f2f2;--muted:#9a9aa0;--card:#232326;--line:#3a3a3e;--ghost:#47474c;--accent:#4f9cf0;--sel:#f06bb8;--bad:#ef6b6b;--good:#6cc070}}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 -apple-system,"PingFang SC","Noto Sans CJK SC",sans-serif;padding-bottom:56px}
+header{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);padding:8px 16px;z-index:2}
+.row{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
+.row+.row{margin-top:6px}
+h1{font-size:15px;margin:0}
+select,button,input{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:2px 8px}
+button{cursor:pointer}
+button:disabled{opacity:.4;cursor:default}
+.tabs button[aria-pressed=true]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.muted{color:var(--muted);font-size:12px}
+main{display:flex;gap:16px;padding:12px 16px;align-items:flex-start}
+#parts{flex:0 0 150px;max-height:calc(100vh - 160px);overflow:auto;position:sticky;top:110px}
+#parts button{display:flex;justify-content:space-between;width:100%;margin:0 0 3px;text-align:left}
+#parts button[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
+#grid{flex:1;min-width:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--size,96px),1fr));gap:8px;align-content:start}
+.card{background:var(--card);border-radius:8px;padding:4px;cursor:pointer;position:relative;border:2px solid transparent}
+.card.on{border-color:var(--sel)}
+.card.on::after{content:"✓";position:absolute;top:2px;right:6px;color:var(--sel);font-weight:700}
+.card.cur{box-shadow:0 0 0 1px var(--fg)}
+.card svg,#detail svg{width:100%;aspect-ratio:1;display:block;background:var(--bg);border-radius:5px}
+.cap{display:flex;justify-content:space-between;gap:4px;font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden}
+.low{color:var(--bad)}.auto,.verified{color:var(--good)}
+.ghost{fill:var(--ghost)}
+.cut{fill:none;stroke:var(--fg);stroke-width:1.2;vector-effect:non-scaling-stroke}
+.mark{fill:none;stroke:var(--sel);stroke-width:2.5;vector-effect:non-scaling-stroke}
+aside{flex:0 0 340px;position:sticky;top:110px}
+#detail svg{cursor:crosshair}
+#detail .chips{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0}
+#detail .chips button[aria-pressed=true]{outline:2px solid var(--fg)}
+#detail p{margin:4px 0}
+#gaps{flex:1}
+#gaps pre{white-space:pre-wrap;word-break:break-all;font-size:18px;line-height:1.5;background:var(--card);padding:10px;border-radius:8px;max-height:50vh;overflow:auto}
+#tray{position:fixed;left:0;right:0;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:8px 16px;z-index:2}
+#tray pre{white-space:pre-wrap;font-size:12px;background:var(--card);padding:8px;border-radius:6px;max-height:40vh;overflow:auto;margin:0 0 8px;user-select:text}
+@media (max-width:900px){main{flex-direction:column}aside,#parts{position:static;flex:auto;width:100%;max-height:none}#grid{width:100%}}
+</style></head><body>
+<header>
+  <div class="row">
+    <h1>paoding review</h1>
+    <label>运行 <select id="run"></select></label>
+    <span class="tabs"><button data-tab="chars">字</button> <button data-tab="parts">部件</button> <button data-tab="gaps">缺口</button></span>
+    <label>视图 <select id="view"><option value="flat">拍平</option><option value="overlay">叠加</option></select></label>
+    <label><input type="checkbox" id="cuts"> 切线</label>
+    <label>大小 <input type="range" id="size" min="56" max="220" step="8"></label>
+    <span class="muted" id="meta"></span>
+  </div>
+  <div class="row" id="filters">
+    <label class="f-chars">状态 <select id="status"><option value="">全部</option><option>low</option><option>auto</option><option>verified</option></select></label>
+    <label class="f-chars">结构 <select id="struct"><option value="">全部</option></select></label>
+    <label class="f-chars">排序 <select id="sort"><option value="conf">置信度↑</option><option value="common">常用字优先</option><option value="unicode">Unicode</option><option value="random">随机抽样</option></select></label>
+    <button class="f-chars" id="reseed" title="换一批随机样本">换一批</button>
+    <label class="f-chars">只看 <input id="q" placeholder="粘贴要看的字" size="14"></label>
+    <label class="f-parts">部件 <input id="partq" placeholder="筛选部件" size="8"></label>
+    <span id="pager"><button id="prev">‹</button> <span id="pageinfo"></span> <button id="next">›</button></span>
+    <span class="muted" id="count"></span>
+    <span class="muted">点击：选中/取消 · ⌥点击：只查看 · 大图上点击：标记位置 · ← → 翻页</span>
+  </div>
+</header>
+<main>
+  <nav id="parts" hidden></nav>
+  <div id="grid"></div>
+  <section id="gaps" hidden></section>
+  <aside id="detail"><p class="muted">点击一个字，在这里放大查看。</p></aside>
+</main>
+<div id="tray">
+  <pre id="text" hidden></pre>
+  <div class="row"><b id="selcount">已选 0 处</b>
+    <button id="copy">复制</button> <button id="show">查看文本</button> <button id="clear">清空</button>
+    <span class="muted" id="copied"></span></div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const PAGE = 200;
+const DEFAULTS = {run: 0, tab: "chars", view: "flat", cuts: 1, size: 96, status: "", struct: "", sort: "conf", seed: 1, q: "", page: 1, part: "", partq: ""};
+const S = {...DEFAULTS};
+let RUNS = [], FONT = null;
+const INDEX = new Map();   // run -> index payload, plus byChar and parts
+const GLYPHS = new Map();  // "run|char" -> glyph payload
+let SEL = [];              // {run (path), char, node, at}: survives restarts with other runs
+let CUR = null;            // {run, char, node} shown in the detail panel
+let seq = 0;
+
+// ---------- state in the URL hash; selection in local storage ----------
+function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  for (const k in DEFAULTS) if (p.has(k)) S[k] = typeof DEFAULTS[k] === "number" ? +p.get(k) : p.get(k);
+}
+function writeHash() {
+  const p = new URLSearchParams();
+  for (const k in DEFAULTS) if (S[k] !== DEFAULTS[k]) p.set(k, S[k]);
+  history.replaceState(null, "", "#" + p.toString());
+}
+function loadSel() { try { SEL = JSON.parse(localStorage.getItem("paoding-review:selection") || "[]"); } catch { SEL = []; } }
+function saveSel() { try { localStorage.setItem("paoding-review:selection", JSON.stringify(SEL)); } catch {} }
+
+// ---------- data ----------
+async function index(run) {
+  if (!INDEX.has(run)) {
+    const d = await (await fetch(`/api/index?run=${run}`)).json();
+    d.byChar = new Map(d.entries.map(e => [e.c, e]));
+    const parts = new Map();
+    for (const e of d.entries) for (const [n, label, score] of e.n) {
+      if (!parts.has(label)) parts.set(label, []);
+      parts.get(label).push({e, n, score});
+    }
+    d.parts = [...parts].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+    INDEX.set(run, d);
+  }
+  return INDEX.get(run);
+}
+async function glyphs(run, chars, onChunk) {
+  const need = chars.filter(c => !GLYPHS.has(run + "|" + c));
+  for (let i = 0; i < need.length; i += 50) {
+    const part = need.slice(i, i + 50);
+    const r = await fetch("/api/glyphs", {method: "POST", body: JSON.stringify({run, chars: part})});
+    const d = await r.json();
+    for (const c in d) GLYPHS.set(run + "|" + c, d[c]);
+    onChunk && onChunk(part);
+  }
+}
+
+// ---------- drawing ----------
+function color(D, k) { return D.colors[k % D.colors.length]; }
+function svg(D, e, g, {focus = null, accent = false, at = []} = {}) {
+  let body = "";
+  if (focus != null) {
+    const k = e.n.findIndex(x => x[0] === focus);
+    e.n.forEach(([n]) => { if (n !== focus) body += `<path d="${g.flat[n]}" class="ghost"/>`; });
+    body += `<path d="${g.overlay[focus]}" fill="${accent ? "var(--accent)" : color(D, k)}"/>`;
+  } else {
+    const op = S.view === "overlay" ? ' fill-opacity=".6"' : "";
+    e.n.forEach(([n], k) => { body += `<path d="${g[S.view][n]}" fill="${color(D, k)}"${op}/>`; });
+  }
+  if (S.cuts) g.cuts.forEach(d => body += `<path d="${d}" class="cut"/>`);
+  at.forEach(([x, y]) => body += `<circle cx="${x}" cy="${y}" r="22" class="mark"/>`);
+  return `<svg viewBox="${D.viewbox}"><g transform="scale(1,-1)">${body}</g></svg>`;
+}
+const fmt = v => v == null ? "–" : v.toFixed(2);
+
+// ---------- selection ----------
+const rp = k => RUNS[k].path;
+const key = (path, char, node) => `${path}|${char}|${node ?? ""}`;
+function findSel(run, char, node) { return SEL.find(s => key(s.run, s.char, s.node) === key(rp(run), char, node)); }
+function toggleSel(run, char, node) {
+  const s = findSel(run, char, node);
+  SEL = s ? SEL.filter(x => x !== s) : [...SEL, {run: rp(run), char, node: node ?? null, at: []}];
+  saveSel(); tray();
+}
+function marks(run, char, node) {
+  return SEL.filter(s => s.run === rp(run) && s.char === char && (node == null || s.node === node)).flatMap(s => s.at);
+}
+function shq(s) { return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`; }
+function text() {
+  if (!SEL.length) return "";
+  const out = [`paoding review · 选中 ${SEL.length} 处（人工觉得不对劲，待分析）`, `font: ${FONT.path} (sha256 ${FONT.sha256.slice(0, 12)}…)`];
+  for (const [k, r] of RUNS.entries()) {
+    const items = SEL.filter(s => s.run === r.path);
+    if (!items.length) continue;
+    const D = INDEX.get(k);
+    out.push("", `run: ${r.path} · level ${r.level} · overrides: ${r.overrides.join(", ") || "无"}`);
+    const tokens = [];
+    for (const s of items) {
+      if (!s.at.length) { if (!tokens.includes(s.char)) tokens.push(s.char); }
+      else s.at.forEach(([x, y]) => tokens.push(`${s.char}@${x},${y}`));
+    }
+    out.push(`诊断: paoding inspect --font ${shq(FONT.path)} --run ${shq(r.path)} ${tokens.join(" ")}`);
+    for (const s of items) {
+      const e = D && D.byChar.get(s.char);
+      let line = e ? `${e.c} ${e.cp} ${e.ids} ${e.st} ${e.cf.toFixed(3)}` : s.char;
+      if (s.node != null && e) {
+        const [n, label, score] = e.n.find(x => x[0] === s.node) || [s.node, "?", null];
+        line += ` · 部件 ${n} ${label} ${fmt(score)}`;
+      }
+      if (s.at.length) line += ` · 位置 ${s.at.map(([x, y]) => `(${x}, ${y})`).join(" ")}`;
+      out.push(line);
+    }
+  }
+  return out.join("\n");
+}
+function tray() {
+  $("#selcount").textContent = `已选 ${SEL.length} 处`;
+  $("#text").textContent = text();
+  $("#copy").disabled = $("#clear").disabled = !SEL.length;
+  document.querySelectorAll(".card").forEach(c => c.classList.toggle("on", !!findSel(S.run, c.dataset.c, c.dataset.n || null)));
+}
+
+// ---------- views ----------
+function shuffled(list, seed) {
+  let a = seed >>> 0;
+  const rnd = () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const out = [...list];
+  for (let i = out.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [out[i], out[j]] = [out[j], out[i]]; }
+  return out;
+}
+function charItems(D) {
+  if (S.q.trim()) return [...new Set([...S.q].filter(c => D.byChar.has(c)))].map(c => ({e: D.byChar.get(c)}));
+  let list = D.entries.filter(e => (!S.status || e.st === S.status) && (!S.struct || e.s === S.struct));
+  const cp = e => e.c.codePointAt(0);
+  if (S.sort === "conf") list.sort((a, b) => a.cf - b.cf || cp(a) - cp(b));
+  else if (S.sort === "unicode") list.sort((a, b) => cp(a) - cp(b));
+  else if (S.sort === "common") list.sort((a, b) => ((a.g || 3) - (b.g || 3)) || cp(a) - cp(b));
+  else list = shuffled(list.sort((a, b) => cp(a) - cp(b)), S.seed);
+  return list.map(e => ({e}));
+}
+function partItems(D) {
+  const hit = D.parts.find(([label]) => label === S.part);
+  if (!hit) return [];
+  return [...hit[1]].sort((a, b) => (a.score ?? 2) - (b.score ?? 2) || a.e.c.codePointAt(0) - b.e.c.codePointAt(0));
+}
+function partsNav(D) {
+  const q = S.partq.trim();
+  const list = D.parts.filter(([label]) => !q || label.includes(q)).slice(0, 400);
+  $("#parts").innerHTML = list.map(([label, xs]) =>
+    `<button data-part="${label}" aria-pressed="${label === S.part}"><span>${label}</span><span class="muted">${xs.length}</span></button>`).join("")
+    || `<p class="muted">没有匹配的部件</p>`;
+}
+
+async function render() {
+  writeHash();
+  const my = ++seq;
+  const D = await index(S.run);
+  if (my !== seq) return;
+  const r = D.run;
+  $("#meta").textContent = `${FONT.file} · level ${r.level} · ${r.count} 字`;
+  document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-pressed", b.dataset.tab === S.tab));
+  document.querySelectorAll(".f-chars").forEach(x => x.hidden = S.tab !== "chars");
+  document.querySelectorAll(".f-parts").forEach(x => x.hidden = S.tab !== "parts");
+  $("#pager").hidden = S.tab === "gaps";
+  $("#grid").hidden = $("#detail").hidden = S.tab === "gaps";
+  $("#gaps").hidden = S.tab !== "gaps";
+  $("#parts").hidden = S.tab !== "parts";
+  const structs = [...new Set(D.entries.map(e => e.s))].sort();
+  $("#struct").innerHTML = `<option value="">全部</option>` + structs.map(s => `<option${s === S.struct ? " selected" : ""}>${s}</option>`).join("");
+  document.documentElement.style.setProperty("--size", S.size + "px");
+  if (S.tab === "gaps") return renderGaps(my);
+
+  if (S.tab === "parts") {
+    if (!S.part && D.parts.length) S.part = D.parts[0][0];
+    partsNav(D);
+  }
+  const items = S.tab === "parts" ? partItems(D) : charItems(D);
+  const pages = Math.max(1, Math.ceil(items.length / PAGE));
+  S.page = Math.min(Math.max(1, S.page), pages);
+  writeHash();
+  $("#pageinfo").textContent = `${S.page} / ${pages}`;
+  $("#prev").disabled = S.page <= 1; $("#next").disabled = S.page >= pages;
+  $("#count").textContent = S.tab === "parts" ? `${S.part} · ${items.length} 处` : `${items.length} / ${D.entries.length} 字`;
+  const shown = items.slice((S.page - 1) * PAGE, S.page * PAGE);
+  $("#grid").innerHTML = shown.map(({e, n, score}) => {
+    const cap = n != null ? `<span>${e.c} <span class="muted">${n}</span></span><span class="${score != null && score < 0.85 ? "low" : "muted"}">${fmt(score)}</span>`
+                          : `<span>${e.c}</span><span class="${e.st}">${e.cf.toFixed(2)}</span>`;
+    return `<div class="card" data-c="${e.c}" data-n="${n ?? ""}"><svg viewBox="${D.viewbox}"></svg><div class="cap">${cap}</div></div>`;
+  }).join("") || `<p class="muted">没有符合条件的字。</p>`;
+  tray();
+  if (CUR && CUR.run === S.run) detail();
+  const paint = () => {
+    if (my !== seq) return;
+    document.querySelectorAll(".card:not(.drawn)").forEach(card => {
+      const e = D.byChar.get(card.dataset.c), g = GLYPHS.get(S.run + "|" + e.c), n = card.dataset.n || null;
+      if (!g) return;
+      card.querySelector("svg").outerHTML = svg(D, e, g, {focus: n, accent: true, at: marks(S.run, e.c, n)});
+      card.classList.add("drawn");
+    });
+  };
+  paint();   // glyphs cached by an earlier page or sort
+  await glyphs(S.run, [...new Set(shown.map(x => x.e.c))], paint);
+}
+
+async function renderGaps(my) {
+  const d = await (await fetch(`/api/gaps?run=${S.run}`)).json();
+  if (my !== seq) return;
+  $("#gaps").innerHTML = `<p>字体中共有汉字 ${d.hanzi} 个，本次运行覆盖 ${d.covered} 个（${(100 * d.covered / Math.max(d.hanzi, 1)).toFixed(1)}%）。以下各字没有切分记录：</p>` +
+    d.groups.map(g => `<h3>${g.label} · ${[...g.chars].length} 个 <button data-copy="${g.key}">复制</button></h3><pre id="gap-${g.key}">${g.chars || "（无）"}</pre>`).join("");
+  $("#gaps").querySelectorAll("button[data-copy]").forEach(b => b.onclick = () => copy($("#gap-" + b.dataset.copy).textContent));
+}
+
+function detail() {
+  const D = INDEX.get(CUR.run), e = D && D.byChar.get(CUR.char), g = GLYPHS.get(CUR.run + "|" + CUR.char);
+  if (!e || !g) return;
+  const sel = findSel(CUR.run, CUR.char, CUR.node);
+  const chips = `<button data-n="" aria-pressed="${CUR.node == null}">全部</button>` + e.n.map(([n, label, score], k) =>
+    `<button data-n="${n}" aria-pressed="${CUR.node === n}" style="border-color:${color(D, k)};border-width:2px">${n} ${label} <span class="muted">${fmt(score)}</span></button>`).join("");
+  const j = Object.entries(e.j).map(([r, c]) => `${r}×${c}`).join(" ");
+  $("#detail").innerHTML = `<p><b style="font-size:20px">${e.c}</b> ${e.cp} · ${e.ids} · ${e.s} · <span class="${e.st}">${e.st} ${e.cf.toFixed(3)}</span></p>
+    ${svg(D, e, g, {focus: CUR.node, at: marks(CUR.run, e.c, CUR.node)})}
+    <div class="chips">${chips}</div>
+    ${j ? `<p class="muted">交接：${j}</p>` : ""}
+    ${e.i.length ? `<p class="muted">问题：${e.i.join("；")}</p>` : ""}
+    ${e.o.length ? `<p class="muted">覆盖：${e.o.join(", ")}</p>` : ""}
+    <p><button id="dsel">${sel ? "取消选中" : "选中"}${CUR.node != null ? "此部件" : "此字"}</button>
+    ${sel && sel.at.length ? `<button id="dclear">清除标记</button>` : ""}</p>
+    <p class="muted">在大图上点击，可标记不对劲的位置（字体单位）。</p>`;
+  $("#detail").querySelectorAll(".chips button").forEach(b => b.onclick = () => { CUR.node = b.dataset.n || null; detail(); });
+  $("#dsel").onclick = () => { toggleSel(CUR.run, CUR.char, CUR.node); refresh(); };
+  const dc = $("#dclear"); if (dc) dc.onclick = () => { sel.at = []; saveSel(); refresh(); };
+  const s = $("#detail svg");
+  s.onclick = ev => {
+    const pt = s.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY;
+    const p = pt.matrixTransform(s.querySelector("g").getScreenCTM().inverse());
+    let item = findSel(CUR.run, CUR.char, CUR.node);
+    const whole = CUR.node != null && findSel(CUR.run, CUR.char, null);
+    if (!item && whole) { item = whole; item.node = CUR.node; }   // narrow the selected character to this part
+    if (!item) { toggleSel(CUR.run, CUR.char, CUR.node); item = findSel(CUR.run, CUR.char, CUR.node); }
+    item.at.push([Math.round(p.x), Math.round(p.y)]);
+    saveSel(); refresh();
+  };
+}
+function refresh() {
+  tray(); detail();
+  const D = INDEX.get(S.run);
+  document.querySelectorAll(`.card[data-c="${CUR.char}"]`).forEach(card => {
+    const g = GLYPHS.get(S.run + "|" + CUR.char), n = card.dataset.n || null;
+    if (g) card.querySelector("svg").outerHTML = svg(D, D.byChar.get(CUR.char), g, {focus: n, accent: true, at: marks(S.run, CUR.char, n)});
+  });
+}
+
+async function copy(t) {
+  try { await navigator.clipboard.writeText(t); }
+  catch {
+    const a = document.createElement("textarea"); a.value = t; document.body.append(a); a.select();
+    document.execCommand("copy"); a.remove();
+  }
+  $("#copied").textContent = "已复制"; setTimeout(() => $("#copied").textContent = "", 1500);
+}
+
+// ---------- wiring ----------
+function bind() {
+  const set = (k, v, page1 = true) => { S[k] = v; if (page1) S.page = 1; render(); };
+  $("#run").onchange = e => { CUR = null; $("#detail").innerHTML = ""; set("run", +e.target.value); };
+  document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => set("tab", b.dataset.tab));
+  $("#view").onchange = e => set("view", e.target.value, false);
+  $("#cuts").onchange = e => set("cuts", e.target.checked ? 1 : 0, false);
+  $("#size").oninput = e => { S.size = +e.target.value; document.documentElement.style.setProperty("--size", S.size + "px"); writeHash(); };
+  for (const k of ["status", "struct", "sort"]) $("#" + k).onchange = e => set(k, e.target.value);
+  $("#reseed").onclick = () => { S.sort = "random"; $("#sort").value = "random"; set("seed", S.seed + 1); };
+  $("#q").onchange = e => set("q", e.target.value);
+  $("#partq").oninput = e => { S.partq = e.target.value; partsNav(INDEX.get(S.run)); writeHash(); };
+  $("#parts").onclick = e => { const b = e.target.closest("button[data-part]"); if (b) set("part", b.dataset.part); };
+  $("#prev").onclick = () => set("page", S.page - 1, false);
+  $("#next").onclick = () => set("page", S.page + 1, false);
+  $("#grid").onclick = e => {
+    const card = e.target.closest(".card");
+    if (!card) return;
+    CUR = {run: S.run, char: card.dataset.c, node: card.dataset.n || null};
+    document.querySelectorAll(".card.cur").forEach(c => c.classList.remove("cur"));
+    card.classList.add("cur");
+    if (!e.altKey) toggleSel(CUR.run, CUR.char, CUR.node);
+    detail();
+  };
+  $("#copy").onclick = () => copy(text());
+  $("#show").onclick = () => { $("#text").hidden = !$("#text").hidden; $("#show").textContent = $("#text").hidden ? "查看文本" : "收起文本"; };
+  $("#clear").onclick = () => { SEL = []; saveSel(); tray(); if (CUR) refresh(); };
+  document.addEventListener("keydown", e => {
+    if (e.target.matches("input,select,textarea") || e.metaKey || e.ctrlKey) return;
+    if (e.key === "ArrowLeft" && !$("#prev").disabled) $("#prev").click();
+    if (e.key === "ArrowRight" && !$("#next").disabled) $("#next").click();
+  });
+}
+
+(async function main() {
+  readHash(); loadSel();
+  const d = await (await fetch("/api/runs")).json();
+  RUNS = d.runs; FONT = d.font;
+  if (!(S.run < RUNS.length)) S.run = 0;
+  $("#run").innerHTML = RUNS.map((r, k) => `<option value="${k}"${k === S.run ? " selected" : ""}>${r.path} · L${r.level}</option>`).join("");
+  $("#view").value = S.view; $("#cuts").checked = !!S.cuts; $("#size").value = S.size;
+  $("#status").value = S.status; $("#sort").value = S.sort; $("#q").value = S.q; $("#partq").value = S.partq;
+  const paths = RUNS.map(r => r.path);
+  SEL = SEL.filter(s => paths.includes(s.run));
+  await Promise.all([...new Set(SEL.map(s => paths.indexOf(s.run)))].map(index));
+  bind(); render();
+})();
+</script></body></html>

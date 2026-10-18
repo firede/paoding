@@ -1,6 +1,5 @@
-"""Run reports: contact sheets (PNG), an interactive page (HTML), summary and low list."""
+"""Run reports: contact sheets (PNG), summary and low list. The interactive page is `paoding review`."""
 
-import html
 import json
 from collections import Counter, defaultdict
 
@@ -8,7 +7,6 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from . import ids
-from .geometry import svg_d, transform_path
 
 COLORS = [(222, 74, 54), (36, 120, 214), (46, 160, 84), (214, 150, 20), (142, 72, 196), (20, 160, 170)]
 OP_NAMES = {"⿰": "lr", "⿱": "tb", "⿲": "lmr", "⿳": "tmb", "⿴": "full", "⿵": "open-b", "⿶": "open-t",
@@ -93,112 +91,6 @@ def sheets(tiles, path_prefix, cols=4, rows=10):
         sheet.save(p)
         paths.append(p)
     return paths
-
-
-# ---------- HTML ----------
-
-def page_data(seg, font):
-    """Per-character data for the HTML page: SVG paths per node and view, font units."""
-    views = {}
-    for view in ("flat", "overlay"):
-        views[view] = {ids.fmt(n): svg_d(transform_path(p, font.from_em)) for n, p in seg.pieces(view).items()}
-    cuts = []
-    for u in seg.units:
-        for line in u.cuts:
-            pts = [font.from_em(*p) for p in line]
-            cuts.append("M" + " L".join(f"{x:.1f} {y:.1f}" for x, y in pts))
-    return {
-        "char": seg.char, "ids": seg.ids, "structure": structure(seg.ids), "status": seg.status,
-        "confidence": seg.confidence, "nodes": [ids.fmt(n) for n in seg.nodes], "views": views, "cuts": cuts,
-        "metrics": seg.metrics, "issues": seg.issues,
-        "faces": [{"nodes": [ids.fmt(n) for n in f.nodes], "flat": ids.fmt(f.flat), "rule": f.rule,
-                   "at": [round(v, 1) for v in font.from_em(*f.point)]}
-                  for u in seg.units for f in u.faces if len(f.nodes) > 1],
-    }
-
-
-def write_html(path, title, entries, upm, descender):
-    colors = ["#%02x%02x%02x" % c for c in COLORS]
-    data = json.dumps(entries, ensure_ascii=False, separators=(",", ":"))
-    box = f"0 {-(upm + descender)} {upm} {upm}"
-    doc = HTML_TEMPLATE.replace("__TITLE__", html.escape(title)).replace("__DATA__", data) \
-        .replace("__COLORS__", json.dumps(colors)).replace("__VIEWBOX__", box)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(doc)
-
-
-HTML_TEMPLATE = r"""<!doctype html>
-<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>__TITLE__</title>
-<style>
-:root{--bg:#fff;--fg:#1d1d1f;--muted:#6e6e73;--card:#f5f5f7;--line:#d2d2d7;--bad:#c62828;--good:#2e7d32}
-@media (prefers-color-scheme:dark){:root{--bg:#161618;--fg:#f2f2f2;--muted:#9a9aa0;--card:#232326;--line:#3a3a3e;--bad:#ef6b6b;--good:#6cc070}}
-body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 -apple-system,"PingFang SC",sans-serif}
-header{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);padding:10px 16px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;z-index:1}
-header h1{font-size:16px;margin:0 12px 0 0}
-select,button,input{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:3px 8px}
-#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px;padding:16px}
-.card{background:var(--card);border-radius:10px;padding:8px;cursor:pointer}
-.card svg{width:100%;aspect-ratio:1;display:block;background:var(--bg);border-radius:6px}
-.cap{display:flex;justify-content:space-between;margin-top:4px;gap:6px}
-.low{color:var(--bad)}.auto,.verified{color:var(--good)}
-.muted{color:var(--muted);font-size:12px}
-dialog{max-width:min(720px,94vw);background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:12px}
-dialog svg{width:min(420px,80vw);aspect-ratio:1;background:var(--card);border-radius:8px}
-pre{white-space:pre-wrap;font-size:12px;background:var(--card);padding:8px;border-radius:6px;max-height:40vh;overflow:auto}
-.chips button{margin:0 4px 4px 0}
-</style></head><body>
-<header><h1>__TITLE__</h1>
-<label>视图 <select id="view"><option value="flat">拍平</option><option value="overlay">叠加</option></select></label>
-<label>状态 <select id="status"><option value="">全部</option><option>low</option><option>auto</option><option>verified</option></select></label>
-<label>结构 <select id="struct"><option value="">全部</option></select></label>
-<label>排序 <select id="sort"><option value="conf">置信度↑</option><option value="order">原顺序</option></select></label>
-<label><input type="checkbox" id="cuts" checked> 切线</label>
-<span class="muted" id="count"></span></header>
-<div id="grid"></div>
-<dialog id="dlg"><div id="detail"></div><form method="dialog"><button>关闭</button></form></dialog>
-<script>
-const DATA=__DATA__, COLORS=__COLORS__, VB="__VIEWBOX__";
-const $=s=>document.querySelector(s);
-const structs=[...new Set(DATA.map(d=>d.structure))].sort();
-structs.forEach(s=>$('#struct').insertAdjacentHTML('beforeend',`<option>${s}</option>`));
-function svg(d,view,only,showCuts){
-  const flip='transform="scale(1,-1)"';
-  let body='';
-  d.nodes.forEach((n,i)=>{
-    if(only!=null&&only!==n)return;
-    const op=view==='overlay'&&only==null?0.6:1;
-    body+=`<path d="${d.views[view][n]}" fill="${COLORS[i%COLORS.length]}" fill-opacity="${op}"/>`;
-  });
-  if(showCuts&&only==null)d.cuts.forEach(c=>body+=`<path d="${c}" fill="none" stroke="currentColor" stroke-width="4"/>`);
-  return `<svg viewBox="${VB}"><g ${flip}>${body}</g></svg>`;
-}
-function render(){
-  const view=$('#view').value,st=$('#status').value,sc=$('#struct').value,cuts=$('#cuts').checked;
-  let rows=DATA.map((d,i)=>({d,i})).filter(({d})=>(!st||d.status===st)&&(!sc||d.structure===sc));
-  if($('#sort').value==='conf')rows.sort((a,b)=>a.d.confidence-b.d.confidence);
-  $('#count').textContent=`${rows.length} / ${DATA.length}`;
-  $('#grid').innerHTML=rows.map(({d,i})=>`<div class="card" data-i="${i}">${svg(d,view,null,cuts)}
-    <div class="cap"><span>${d.char} <span class="muted">${d.ids}</span></span><span class="${d.status}">${d.confidence.toFixed(2)}</span></div></div>`).join('');
-}
-function detail(i){
-  const d=DATA[i];let only=null;
-  const draw=()=>{
-    const v=$('#view').value;
-    $('#detail').innerHTML=`<h2>${d.char} <span class="muted">${d.ids} · ${d.structure} · ${d.status} ${d.confidence.toFixed(3)}</span></h2>
-    <div class="chips"><button data-n="">全部</button>${d.nodes.map((n,k)=>`<button data-n="${n}" style="border-color:${COLORS[k%COLORS.length]}">节点 ${n}</button>`).join('')}</div>
-    ${svg(d,only==null?v:'overlay',only,$('#cuts').checked)}
-    <p class="muted">单独显示某个节点时使用叠加视图（完整部件）。</p>
-    <pre>${JSON.stringify({faces:d.faces,metrics:d.metrics,issues:d.issues},null,1)}</pre>`;
-    $('#detail').querySelectorAll('button[data-n]').forEach(b=>b.onclick=()=>{only=b.dataset.n||null;draw();});
-  };
-  draw();$('#dlg').showModal();
-}
-['#view','#status','#struct','#sort','#cuts'].forEach(s=>$(s).onchange=render);
-$('#grid').onclick=e=>{const c=e.target.closest('.card');if(c)detail(+c.dataset.i);};
-render();
-</script></body></html>
-"""
 
 
 # ---------- text ----------
