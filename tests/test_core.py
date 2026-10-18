@@ -15,7 +15,7 @@ from paoding import cli, ids, overrides, record, target, testset
 from paoding.geometry import Canvas, area, from_shapely, op, resample, to_shapely
 from paoding.mmah import MMAH
 from paoding.register import Affine, RBFField, Warp, fit_box, ink_box
-from paoding.segment import realize, segment
+from paoding.segment import _cells, realize, segment
 from paoding.segment_bitmap import _mend_runs, pixel_record, segment_bitmap
 from paoding.target import BitmapTarget
 from paoding.target.outline import OutlineFont
@@ -267,6 +267,27 @@ def test_cut_faces_all_realized(outline_seg):
             continue
         pieces = realize(unit.path, unit.cuts, unit.faces)
         assert all(area(p) > 0 for p in pieces), (outline_seg.char, [f.nodes for f in unit.faces])
+
+
+# 喹 吟: the right part's left-falling stroke, longer in the reference, was
+# pulled across the gap onto the 口; only its tail reaches that unit
+@pytest.mark.parametrize("char", "喹吟")
+def test_stroke_tail_spilt_onto_another_unit(outline_font, mmah, char):
+    seg = segment(char, outline_font, mmah)
+    assert any(u.method == "direct" and u.node == (0,) for u in seg.units), char
+    assert seg.status == "auto"
+
+
+# 兹 周: a face pinched in two where the outline nearly touches itself
+@pytest.mark.parametrize("char", "兹周")
+def test_every_rebuilt_cell_has_a_face_point(outline_font, mmah, char):
+    seg = segment(char, outline_font, mmah)
+    for unit in seg.units:
+        if unit.method != "cut":
+            continue
+        pts = shapely.points(np.array([f.point for f in unit.faces]))
+        cells = [c for c in _cells(to_shapely(unit.path, steps=16), unit.cuts) if c.area >= 1.0]
+        assert all(shapely.contains(c, pts).any() for c in cells), char
 
 
 def test_record_json_round_trip(outline_seg, outline_font):

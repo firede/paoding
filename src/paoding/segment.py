@@ -105,12 +105,7 @@ def realize(unit_path, cuts, faces, extend=2.0, pad=3.0):
     The flattened unit is split along the cut lines; each split face, grown a
     little and with the other faces removed, clips the exact unit outline.
     """
-    shape = to_shapely(unit_path, steps=16)
-    lines = [_extend(np.asarray(c), extend) for c in cuts]
-    # snap-rounded noding: a cut ending on the outline joins it even at a grazing angle
-    noded = shapely.unary_union([shape.boundary, *[shapely.LineString(l) for l in lines]], grid_size=GRID)
-    cells = [f for f in polygons(shapely.GeometryCollection(list(shapely.polygonize(shapely.get_parts(noded)).geoms)))
-             if shape.contains(f.representative_point())]
+    cells = _cells(to_shapely(unit_path, steps=16), cuts, extend)
     pts = shapely.points(np.array([f.point for f in faces]))
     owner = []
     for c in cells:
@@ -126,6 +121,15 @@ def realize(unit_path, cuts, faces, extend=2.0, pad=3.0):
         piece = op(unit_path, from_shapely(clip), "INTERSECTION")
         pieces[owner[i]] = op(pieces[owner[i]], piece, "UNION")
     return pieces
+
+
+def _cells(shape, cuts, extend=2.0):
+    """The flattened unit split along the cut lines, as realize() sees it."""
+    lines = [_extend(np.asarray(c), extend) for c in cuts]
+    # snap-rounded noding: a cut ending on the outline joins it even at a grazing angle
+    noded = shapely.unary_union([shape.boundary, *[shapely.LineString(l) for l in lines]], grid_size=GRID)
+    return [f for f in polygons(shapely.GeometryCollection(list(shapely.polygonize(shapely.get_parts(noded)).geoms)))
+            if shape.contains(f.representative_point())]
 
 
 def _extend(line, d):
@@ -206,7 +210,7 @@ def _refine(seg, font, ref, units, masks, ink, canvas, warp, level, override, mi
     return stroke_warps
 
 
-def _assign(seg, font, units, masks, stroke_warps, override, min_run):
+def _assign(seg, font, units, masks, stroke_warps, override, min_run, spill_share=0.5):
     """Draw the strokes through their warps, then give each unit to a part or cut it."""
     dbg, canvas, nodes = seg.debug, seg.debug["canvas"], seg.nodes
     ref, ink, stroke_node = dbg["ref"], dbg["ink"], dbg["stroke_node"]
@@ -222,13 +226,26 @@ def _assign(seg, font, units, masks, stroke_warps, override, min_run):
     nearest = np.array(stroke_node)[np.argmin(dist, 0)]
     dbg.update(lines=lines, widths=widths, nearest=nearest, stroke_warps=stroke_warps)
 
+    # length of every stroke's median inside every unit
+    run = np.zeros((len(lines), len(units)))
+    hits = []                           # per stroke and unit: which median points lie in it
+    for i, m in enumerate(lines):
+        r, c = np.round(canvas.index(m)).astype(int)
+        ok = (r >= 0) & (r < canvas.res) & (c >= 0) & (c < canvas.res)
+        r, c = np.where(ok, r, 0), np.where(ok, c, 0)
+        hits.append([mask[r, c] & ok for mask in masks])
+        run[i] = [h.sum() * _spacing(m) for h in hits[i]]
+    # a stroke is one piece of ink, so it lies in one unit; where its median reaches
+    # into another unit for only a stretch (a reference tail running longer, pulled
+    # across a gap onto a neighbour's ink), that stretch is not the part's ink there
+    spill = (run > 0) & (run < spill_share * run.max(axis=1, keepdims=True))
+    dbg["spilt"] = [np.any([hits[i][j] for j in np.flatnonzero(spill[i])], axis=0) if spill[i].any()
+                    else np.zeros(len(m), bool) for i, m in enumerate(lines)]
+
     forced = {int(k): ids.unfmt(v) for k, v in (override.get("units") or {}).items()}
-    for u, mask in zip(units, masks):
+    for j, (u, mask) in enumerate(zip(units, masks)):
         runs = np.zeros(len(nodes))
-        for i, m in enumerate(lines):
-            r, c = np.round(canvas.index(m)).astype(int)
-            ok = (r >= 0) & (r < canvas.res) & (c >= 0) & (c < canvas.res)
-            runs[stroke_node[i]] += mask[r[ok], c[ok]].sum() * _spacing(m)
+        np.add.at(runs, stroke_node, np.where(spill[:, j], 0.0, run[:, j]))
         res = UnitResult(list(u.contours), "direct", path=u.path,
                          runs={nodes[k]: round(float(v), 1) for k, v in enumerate(runs) if v > 0})
         hit = [c for c in u.contours if c in forced]
@@ -241,7 +258,7 @@ def _assign(seg, font, units, masks, stroke_warps, override, min_run):
         else:
             res.method = "cut"
             flat = [(font.to_em(*o["point"]), ids.unfmt(o["node"])) for o in override.get("flat") or []]
-            _cut(res, u, set(int(k) for k in present), seg, flat)
+            _cut(res, u, set(int(k) for k in present), seg, flat, skip=set(np.flatnonzero(spill[:, j])))
         seg.units.append(res)
 
 
@@ -257,12 +274,12 @@ def _stack(nodes, order):
     return [n for n in wanted if n in nodes] + [n for n in nodes if n not in wanted]
 
 
-def _cut(res, unit, present, seg, flat_overrides, min_face=25.0):
+def _cut(res, unit, present, seg, flat_overrides, skip=(), min_face=25.0):
     dbg = seg.debug
     ref, lines, widths, stroke_node = dbg["ref"], dbg["lines"], dbg["widths"], dbg["stroke_node"]
     nodes = seg.nodes
     shape = to_shapely(unit.path, steps=16)
-    strokes = [i for i in range(len(lines)) if stroke_node[i] in present]
+    strokes = [i for i in range(len(lines)) if stroke_node[i] in present and i not in skip]
     bands = {i: _areal(band(lines[i], widths[i]).intersection(shape)) for i in strokes}
     region = {}
     for i in strokes:
@@ -351,6 +368,18 @@ def _cut(res, unit, present, seg, flat_overrides, min_face=25.0):
     for g, face in merged:
         p = g.representative_point()
         res.faces.append(Face((round(p.x, 1), round(p.y, 1)), face.nodes, face.flat, face.rule))
+    # a face can fall apart into several cells when rebuilt (where the outline pinches,
+    # snap-rounding joins its two sides): every cell needs a point, or it takes the nearest
+    pts = shapely.points(np.array([f.point for f in res.faces]))
+    # (hairline cells may take the nearest point; one rounded off into a neighbour would steal it)
+    for cell in _cells(shape, res.cuts):
+        if cell.area < min_face or shapely.contains(cell, pts).any():
+            continue
+        g, face = max(merged, key=lambda gf: gf[0].intersection(cell).area)
+        p = cell.representative_point()
+        p = (round(p.x, 1), round(p.y, 1))
+        if cell.contains(shapely.Point(p)):
+            res.faces.append(Face(p, face.nodes, face.flat, face.rule))
 
 
 GRID = 0.5    # snap-rounding grid, em units (1/1000 em): far below anything visible
@@ -428,6 +457,14 @@ def _owner(face, lab, strokes, lines, widths, stroke_node, nodes):
 
 # ---------- scoring ----------
 
+def _core(line, spilt=None):
+    """The middle 70% of a median, without points spilt onto another unit (unless that is all of it)."""
+    a, b = int(len(line) * 0.15), max(int(len(line) * 0.85), 1) + 1
+    if spilt is None or spilt[a:b].all():
+        return line[a:b]
+    return line[a:b][~spilt[a:b]]
+
+
 def score(seg, slack=0.0, node_purity=None):
     """How well the registered reference explains the split, per node.
 
@@ -443,6 +480,7 @@ def score(seg, slack=0.0, node_purity=None):
     dbg = seg.debug
     canvas, ref, lines, widths = dbg["canvas"], dbg["ref"], dbg["lines"], dbg["widths"]
     stroke_node, stroke_warps = dbg["stroke_node"], dbg["stroke_warps"]
+    spilt = dbg.get("spilt")
     overlay = {n: canvas.path_mask(p) for n, p in seg.pieces("overlay").items()}
     flat = {n: canvas.path_mask(p) for n, p in seg.pieces("flat").items()}
     dbg.update(overlay_masks=overlay, flat_masks=flat)
@@ -455,7 +493,8 @@ def score(seg, slack=0.0, node_purity=None):
         width = float(np.median([widths[i] for i in idx]))
         # stroke ends differ most between styles (kaishu dots and tails run
         # longer): judge the middle 70% of each median, with some slack
-        core = np.concatenate([lines[i][int(len(lines[i]) * 0.15):max(int(len(lines[i]) * 0.85), 1) + 1] for i in idx])
+        # stretches spilt onto another unit's ink are not the part's (see _assign)
+        core = np.concatenate([_core(lines[i], spilt[i] if spilt else None) for i in idx])
         near = ndimage.distance_transform_edt(~overlay[n]) / canvas.px
         inside = ndimage.map_coordinates(near, canvas.index(core), order=1) <= max(0.25 * width, slack)
         sp = skel[flat[n][ys, xs]]
