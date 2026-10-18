@@ -560,7 +560,7 @@ def check_structure(seg):
     votes = skel.voted(g, spans, dbg["lines"], dbg["stroke_node"], dbg.get("spilt"))
     dbg["skeleton"] = g
     out = []
-    for d in skel.disputes(g, spans, own, votes):
+    for d in skel.disputes(g, spans, own, votes, labels, canvas):
         involved = list(d["ink"]) if d["kind"] == "split" else [max(d["ink"], key=d["ink"].get), max(d["vote"], key=d["vote"].get)]
         out.append({"kind": d["kind"], "at": tuple(d["at"]), "nodes": tuple(nodes[k] for k in involved)})
     for d in skel.strays({k: overlay[n] for k, n in enumerate(nodes)}, labels, dbg["ink"], canvas):

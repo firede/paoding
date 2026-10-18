@@ -169,7 +169,7 @@ async function storeGroups(groups) {
 
 // ---------- drawing ----------
 function color(D, k) { return D.colors[k % D.colors.length]; }
-const FLAG_KINDS = {split: "一笔被切开", vote: "归属与笔画不符", stray: "孤立碎块"};
+const FLAG_KINDS = {split: "一笔被切开", vote: "归属与笔画不符", stray: "叠加视图里伸进别的笔画的碎块"};
 function svg(D, e, g, {focus = null, accent = false, at = [], skel = null} = {}) {
   let body = "";
   if (focus != null && g.overlay[focus] != null) {

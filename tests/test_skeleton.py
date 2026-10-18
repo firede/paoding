@@ -49,13 +49,18 @@ def test_split_stretch_is_disputed():
     labels[:, 256:] = np.where(ink[:, 256:], 1, -1)
     spans = skeleton.stretches(g)
     own = skeleton.owned(g, spans, labels, canvas)
-    assert [d["kind"] for d in skeleton.disputes(g, spans, own, [{} for _ in spans])] == ["split"]
+    assert [d["kind"] for d in skeleton.disputes(g, spans, own, [{} for _ in spans], labels, canvas)] == ["split"]
+    # the point given is on the minority's piece, not the middle of the stretch
+    labels = np.where(ink, 0, -1)
+    labels[:, 389:] = np.where(ink[:, 389:], 1, -1)          # part 1: the bar right of x = 760
+    (d,) = skeleton.disputes(g, spans, skeleton.owned(g, spans, labels, canvas), [{} for _ in spans], labels, canvas)
+    assert 760 < d["at"][0] < 900
     # medians running along it for part 1 while part 0 owns it all: a vote dispute
     labels = np.where(ink, 0, -1)
     own = skeleton.owned(g, spans, labels, canvas)
     line = np.column_stack([np.linspace(120, 880, 200), np.full(200, 380.0)])
     votes = skeleton.voted(g, spans, [line], [1])
-    (d,) = skeleton.disputes(g, spans, own, votes)
+    (d,) = skeleton.disputes(g, spans, own, votes, labels, canvas)
     assert d["kind"] == "vote" and list(d["vote"]) == [1] and list(d["ink"]) == [0]
 
 

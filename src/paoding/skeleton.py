@@ -310,13 +310,17 @@ def _steps(pts):
     return np.r_[d, 0.0] / 2 + np.r_[0.0, d] / 2
 
 
+def _owners(pts, labels, canvas):
+    r, c = np.round(canvas.index(pts)).astype(int)
+    return labels[np.clip(r, 0, canvas.res - 1), np.clip(c, 0, canvas.res - 1)]
+
+
 def owned(g, spans, labels, canvas):
     """Per stretch: {owner index: length of the stretch on that owner's ink}, from a raster of owners (-1: none)."""
     out = []
     for k, a, b in spans:
         pts = g.segments[k].points[a:b]
-        r, c = np.round(canvas.index(pts)).astype(int)
-        own = labels[np.clip(r, 0, canvas.res - 1), np.clip(c, 0, canvas.res - 1)]
+        own = _owners(pts, labels, canvas)
         lengths = {}
         for o, d in zip(own, _steps(pts)):
             if o >= 0:
@@ -361,7 +365,7 @@ def voted(g, spans, lines, owner, skip=None, reach=15.0, angle=40.0):
     return out
 
 
-def disputes(g, spans, own, votes, min_len=None, lead=2.0, cover=0.5, min_vote=2.0):
+def disputes(g, spans, own, votes, labels, canvas, min_len=None, lead=2.0, cover=0.5, min_vote=2.0):
     """Stretches whose ink is split between owners, or given to an owner the medians do not run along.
 
     split: a second owner holds at least min_len of it (default: the stroke's half
@@ -369,6 +373,8 @@ def disputes(g, spans, own, votes, min_len=None, lead=2.0, cover=0.5, min_vote=2
     more) one owner's, covering at least cover of its length, and that is not the
     owner of most of its ink; only on stretches at least min_vote half widths
     long (shorter ones, stubs past a joint, draw stray votes).
+    The point given is the middle of the longest run of a minority owner for a
+    split (where the wrong piece is), the middle of the stretch for a vote.
     """
     out = []
     for (k, a, b), lengths, vote in zip(spans, own, votes):
@@ -387,11 +393,30 @@ def disputes(g, spans, own, votes, min_len=None, lead=2.0, cover=0.5, min_vote=2
               and vote[winner] >= cover * total
               and vote[winner] >= lead * vote.get(major, 0.0)):
             kind = "vote"
+        at = s.points[(a + b) // 2]
+        if kind == "split":
+            at = _minority(s.points[a:b], _owners(s.points[a:b], labels, canvas), major)
         if kind:
-            out.append({"kind": kind, "segment": k, "span": (a, b), "at": s.points[(a + b) // 2],
+            out.append({"kind": kind, "segment": k, "span": (a, b), "at": at,
                         "ink": dict(sorted(lengths.items(), key=lambda kv: -kv[1])),
                         "vote": dict(sorted(vote.items(), key=lambda kv: -kv[1])), "length": total})
     return out
+
+
+def _minority(pts, own, major):
+    """The middle point of the longest run of points owned by someone other than major."""
+    steps = _steps(pts)
+    best, run, start = (0.0, 0, 0), 0.0, None
+    for i, o in enumerate(np.r_[own, major]):
+        if o >= 0 and o != major:
+            if start is None:
+                start, run = i, 0.0
+            run += steps[i]
+        elif start is not None:
+            best = max(best, (run, start, i))
+            start = None
+    _, a, b = best
+    return pts[(a + b - 1) // 2] if b > a else pts[len(pts) // 2]
 
 
 def strays(masks, labels, ink, canvas, share=0.15, floor=400.0):
