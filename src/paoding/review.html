@@ -17,14 +17,19 @@ button:disabled{opacity:.4;cursor:default}
 .tabs button[aria-pressed=true]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
 .muted{color:var(--muted);font-size:12px}
 main{display:flex;gap:16px;padding:12px 16px;align-items:flex-start}
-#parts{flex:0 0 150px;max-height:calc(100vh - 160px);overflow:auto;position:sticky;top:110px}
-#parts button{display:flex;justify-content:space-between;width:100%;margin:0 0 3px;text-align:left}
-#parts button[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
+nav{flex:0 0 150px;max-height:calc(100vh - 160px);overflow:auto;position:sticky;top:110px}
+nav button{display:flex;justify-content:space-between;gap:6px;width:100%;margin:0 0 3px;text-align:left}
+nav button span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+nav button[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
+#gnav{flex-basis:190px}
 #grid{flex:1;min-width:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--size,96px),1fr));gap:8px;align-content:start}
+#grid.pairs{grid-template-columns:repeat(auto-fill,minmax(calc(2 * var(--size,96px) + 14px),1fr))}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:4px;background:var(--line);border-radius:10px;padding:3px}
 .card{background:var(--card);border-radius:8px;padding:4px;cursor:pointer;position:relative;border:2px solid transparent}
 .card.on{border-color:var(--sel)}
 .card.on::after{content:"✓";position:absolute;top:2px;right:6px;color:var(--sel);font-weight:700}
 .card.cur{box-shadow:0 0 0 1px var(--fg)}
+.card.missing{display:flex;align-items:center;justify-content:center;aspect-ratio:1;cursor:default}
 .card svg,#detail svg{width:100%;aspect-ratio:1;display:block;background:var(--bg);border-radius:5px}
 .cap{display:flex;justify-content:space-between;gap:4px;font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden}
 .low{color:var(--bad)}.auto,.verified{color:var(--good)}
@@ -40,13 +45,13 @@ aside{flex:0 0 340px;position:sticky;top:110px}
 #gaps pre{white-space:pre-wrap;word-break:break-all;font-size:18px;line-height:1.5;background:var(--card);padding:10px;border-radius:8px;max-height:50vh;overflow:auto}
 #tray{position:fixed;left:0;right:0;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:8px 16px;z-index:2}
 #tray pre{white-space:pre-wrap;font-size:12px;background:var(--card);padding:8px;border-radius:6px;max-height:40vh;overflow:auto;margin:0 0 8px;user-select:text}
-@media (max-width:900px){main{flex-direction:column}aside,#parts{position:static;flex:auto;width:100%;max-height:none}#grid{width:100%}}
+@media (max-width:900px){main{flex-direction:column}aside,nav{position:static;flex:auto;width:100%;max-height:none}#grid{width:100%}}
 </style></head><body>
 <header>
   <div class="row">
     <h1>paoding review</h1>
     <label>运行 <select id="run"></select></label>
-    <span class="tabs"><button data-tab="chars">字</button> <button data-tab="parts">部件</button> <button data-tab="gaps">缺口</button></span>
+    <span class="tabs"><button data-tab="chars">字</button> <button data-tab="parts">部件</button> <button data-tab="groups">分组</button> <button data-tab="gaps">缺口</button></span>
     <label>视图 <select id="view"><option value="flat">拍平</option><option value="overlay">叠加</option></select></label>
     <label><input type="checkbox" id="cuts"> 切线</label>
     <label>大小 <input type="range" id="size" min="56" max="220" step="8"></label>
@@ -59,6 +64,10 @@ aside{flex:0 0 340px;position:sticky;top:110px}
     <button class="f-chars" id="reseed" title="换一批随机样本">换一批</button>
     <label class="f-chars">只看 <input id="q" placeholder="粘贴要看的字" size="14"></label>
     <label class="f-parts">部件 <input id="partq" placeholder="筛选部件" size="8"></label>
+    <label class="f-groups">对比 <select id="cmp"></select></label>
+    <button class="f-groups" id="gcopy">复制本组文本</button>
+    <button class="f-groups" id="gload" title="把本组的字加入当前选择">加入选择</button>
+    <button class="f-groups" id="gdel">删除本组</button>
     <span id="pager"><button id="prev">‹</button> <span id="pageinfo"></span> <button id="next">›</button></span>
     <span class="muted" id="count"></span>
     <span class="muted">点击：选中/取消 · ⌥点击：只查看 · 大图上点击：标记位置 · ← → 翻页</span>
@@ -66,6 +75,7 @@ aside{flex:0 0 340px;position:sticky;top:110px}
 </header>
 <main>
   <nav id="parts" hidden></nav>
+  <nav id="gnav" hidden></nav>
   <div id="grid"></div>
   <section id="gaps" hidden></section>
   <aside id="detail"><p class="muted">点击一个字，在这里放大查看。</p></aside>
@@ -74,17 +84,19 @@ aside{flex:0 0 340px;position:sticky;top:110px}
   <pre id="text" hidden></pre>
   <div class="row"><b id="selcount">已选 0 处</b>
     <button id="copy">复制</button> <button id="show">查看文本</button> <button id="clear">清空</button>
+    <input id="gname" placeholder="分组名（可留空）" size="14"> <button id="save">存为分组</button>
     <span class="muted" id="copied"></span></div>
 </div>
 <script>
 const $ = s => document.querySelector(s);
 const PAGE = 200;
-const DEFAULTS = {run: 0, tab: "chars", view: "flat", cuts: 1, size: 96, status: "", struct: "", sort: "conf", seed: 1, q: "", page: 1, part: "", partq: ""};
+const DEFAULTS = {run: 0, tab: "chars", view: "flat", cuts: 1, size: 96, status: "", struct: "", sort: "conf", seed: 1, q: "", page: 1, part: "", partq: "", group: "", cmp: -1};
 const S = {...DEFAULTS};
 let RUNS = [], FONT = null;
-const INDEX = new Map();   // run -> index payload, plus byChar and parts
-const GLYPHS = new Map();  // "run|char" -> glyph payload
+const INDEX = new Map();   // "path@version" -> index payload, plus byChar and parts
+const GLYPHS = new Map();  // "path@version|char" -> glyph payload
 let SEL = [];              // {run (path), char, node, at}: survives restarts with other runs
+let GROUPS = [];           // [{id, name, created, items: [{run, char, node, at}]}], kept on the server
 let CUR = null;            // {run, char, node} shown in the detail panel
 let seq = 0;
 
@@ -101,9 +113,13 @@ function writeHash() {
 function loadSel() { try { SEL = JSON.parse(localStorage.getItem("paoding-review:selection") || "[]"); } catch { SEL = []; } }
 function saveSel() { try { localStorage.setItem("paoding-review:selection", JSON.stringify(SEL)); } catch {} }
 
-// ---------- data ----------
+// ---------- data (cached per run version: a rerun into the same directory shows up) ----------
+const ck = k => RUNS[k].path + "@" + RUNS[k].version;
+const idx = k => INDEX.get(ck(k));
+const gl = (k, c) => GLYPHS.get(ck(k) + "|" + c);
 async function index(run) {
-  if (!INDEX.has(run)) {
+  const key = ck(run);
+  if (!INDEX.has(key)) {
     const d = await (await fetch(`/api/index?run=${run}`)).json();
     d.byChar = new Map(d.entries.map(e => [e.c, e]));
     const parts = new Map();
@@ -112,26 +128,43 @@ async function index(run) {
       parts.get(label).push({e, n, score});
     }
     d.parts = [...parts].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
-    INDEX.set(run, d);
+    INDEX.set(key, d);
   }
-  return INDEX.get(run);
+  return INDEX.get(key);
 }
 async function glyphs(run, chars, onChunk) {
-  const need = chars.filter(c => !GLYPHS.has(run + "|" + c));
+  const key = ck(run);
+  const need = chars.filter(c => !GLYPHS.has(key + "|" + c));
   for (let i = 0; i < need.length; i += 50) {
     const part = need.slice(i, i + 50);
     const r = await fetch("/api/glyphs", {method: "POST", body: JSON.stringify({run, chars: part})});
     const d = await r.json();
-    for (const c in d) GLYPHS.set(run + "|" + c, d[c]);
+    for (const c in d) GLYPHS.set(key + "|" + c, d[c]);
     onChunk && onChunk(part);
   }
+}
+async function checkRuns() {
+  const d = await (await fetch("/api/runs")).json();
+  if (d.runs.map(r => r.path).join("\n") !== RUNS.map(r => r.path).join("\n")) return location.reload();
+  const changed = d.runs.filter((r, k) => r.version !== RUNS[k].version).map(r => r.path);
+  if (!changed.length) return;
+  RUNS = d.runs;
+  $("#meta").dataset.note = `已重新载入：${changed.join("、")}`;
+  render();
+}
+async function loadGroups() { GROUPS = (await (await fetch("/api/groups")).json()).groups; }
+async function storeGroups(groups) {
+  const r = await fetch("/api/groups", {method: "POST", body: JSON.stringify({groups})});
+  const d = await r.json();
+  if (d.error) throw new Error(d.error);
+  GROUPS = d.groups;
 }
 
 // ---------- drawing ----------
 function color(D, k) { return D.colors[k % D.colors.length]; }
 function svg(D, e, g, {focus = null, accent = false, at = []} = {}) {
   let body = "";
-  if (focus != null) {
+  if (focus != null && g.overlay[focus] != null) {
     const k = e.n.findIndex(x => x[0] === focus);
     e.n.forEach(([n]) => { if (n !== focus) body += `<path d="${g.flat[n]}" class="ghost"/>`; });
     body += `<path d="${g.overlay[focus]}" fill="${accent ? "var(--accent)" : color(D, k)}"/>`;
@@ -144,6 +177,12 @@ function svg(D, e, g, {focus = null, accent = false, at = []} = {}) {
   return `<svg viewBox="${D.viewbox}"><g transform="scale(1,-1)">${body}</g></svg>`;
 }
 const fmt = v => v == null ? "–" : v.toFixed(2);
+// a card: run k, character, optional node; `at` overrides the marks drawn (a group's own points)
+function card(k, e, {n = null, score, at = null, label = ""} = {}) {
+  const cap = n != null ? `<span>${e.c} <span class="muted">${label}${n}</span></span><span class="${score != null && score < 0.85 ? "low" : "muted"}">${fmt(score)}</span>`
+                        : `<span>${e.c} <span class="muted">${label}</span></span><span class="${e.st}">${e.cf.toFixed(2)}</span>`;
+  return `<div class="card" data-k="${k}" data-c="${e.c}" data-n="${n ?? ""}"${at ? ` data-at='${JSON.stringify(at)}'` : ""}><svg viewBox="${idx(k).viewbox}"></svg><div class="cap">${cap}</div></div>`;
+}
 
 // ---------- selection ----------
 const rp = k => RUNS[k].path;
@@ -158,23 +197,23 @@ function marks(run, char, node) {
   return SEL.filter(s => s.run === rp(run) && s.char === char && (node == null || s.node === node)).flatMap(s => s.at);
 }
 function shq(s) { return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`; }
-function text() {
-  if (!SEL.length) return "";
-  const out = [`paoding review · 选中 ${SEL.length} 处（人工觉得不对劲，待分析）`, `font: ${FONT.path} (sha256 ${FONT.sha256.slice(0, 12)}…)`];
+function text(items = SEL, title = `选中 ${SEL.length} 处（人工觉得不对劲，待分析）`) {
+  if (!items.length) return "";
+  const out = [`paoding review · ${title}`, `font: ${FONT.path} (sha256 ${FONT.sha256.slice(0, 12)}…)`];
   for (const [k, r] of RUNS.entries()) {
-    const items = SEL.filter(s => s.run === r.path);
-    if (!items.length) continue;
-    const D = INDEX.get(k);
+    const mine = items.filter(s => s.run === r.path);
+    if (!mine.length) continue;
+    const D = idx(k);
     out.push("", `run: ${r.path} · level ${r.level} · overrides: ${r.overrides.join(", ") || "无"}`);
     const tokens = [];
-    for (const s of items) {
+    for (const s of mine) {
       if (!s.at.length) { if (!tokens.includes(s.char)) tokens.push(s.char); }
       else s.at.forEach(([x, y]) => tokens.push(`${s.char}@${x},${y}`));
     }
     out.push(`诊断: paoding inspect --font ${shq(FONT.path)} --run ${shq(r.path)} ${tokens.join(" ")}`);
-    for (const s of items) {
+    for (const s of mine) {
       const e = D && D.byChar.get(s.char);
-      let line = e ? `${e.c} ${e.cp} ${e.ids} ${e.st} ${e.cf.toFixed(3)}` : s.char;
+      let line = e ? `${e.c} ${e.cp} ${e.ids} ${e.st} ${e.cf.toFixed(3)}` : `${s.char}（不在此运行中）`;
       if (s.node != null && e) {
         const [n, label, score] = e.n.find(x => x[0] === s.node) || [s.node, "?", null];
         line += ` · 部件 ${n} ${label} ${fmt(score)}`;
@@ -188,8 +227,8 @@ function text() {
 function tray() {
   $("#selcount").textContent = `已选 ${SEL.length} 处`;
   $("#text").textContent = text();
-  $("#copy").disabled = $("#clear").disabled = !SEL.length;
-  document.querySelectorAll(".card").forEach(c => c.classList.toggle("on", !!findSel(S.run, c.dataset.c, c.dataset.n || null)));
+  $("#copy").disabled = $("#clear").disabled = $("#save").disabled = !SEL.length;
+  document.querySelectorAll(".card[data-k]").forEach(c => c.classList.toggle("on", !!findSel(+c.dataset.k, c.dataset.c, c.dataset.n || null)));
 }
 
 // ---------- views ----------
@@ -222,56 +261,93 @@ function partsNav(D) {
     `<button data-part="${label}" aria-pressed="${label === S.part}"><span>${label}</span><span class="muted">${xs.length}</span></button>`).join("")
     || `<p class="muted">没有匹配的部件</p>`;
 }
+function groupsNav() {
+  $("#gnav").innerHTML = GROUPS.map(g =>
+    `<button data-group="${g.id}" aria-pressed="${g.id === S.group}" title="${g.created}"><span>${g.name}</span><span class="muted">${g.items.length}</span></button>`).join("")
+    || `<p class="muted">还没有分组。选中一些字后，在底部“存为分组”。</p>`;
+}
+const curGroup = () => GROUPS.find(g => g.id === S.group);
+// a group's items in their stored order, each shown in the current run (and the compared one)
+function groupCells(group, runs) {
+  return group.items.map(it => runs.map((k, i) => {
+    const D = idx(k), e = D.byChar.get(it.char);
+    const label = runs.length > 1 ? (i ? "B " : "A ") : "";
+    if (!e) return `<div class="card missing muted">${it.char} 不在 ${rp(k)}</div>`;
+    const score = it.node != null ? (e.n.find(x => x[0] === it.node) || [])[2] : undefined;
+    return card(k, e, {n: it.node, score, at: it.at, label});
+  }).join(""));
+}
 
 async function render() {
   writeHash();
   const my = ++seq;
   const D = await index(S.run);
+  const cmp = S.tab === "groups" && S.cmp >= 0 && S.cmp < RUNS.length && S.cmp !== S.run ? S.cmp : -1;
+  if (cmp >= 0) await index(cmp);
   if (my !== seq) return;
   const r = D.run;
-  $("#meta").textContent = `${FONT.file} · level ${r.level} · ${r.count} 字`;
+  $("#meta").textContent = `${FONT.file} · level ${r.level} · ${r.count} 字` + ($("#meta").dataset.note ? ` · ${$("#meta").dataset.note}` : "");
+  delete $("#meta").dataset.note;
   document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-pressed", b.dataset.tab === S.tab));
-  document.querySelectorAll(".f-chars").forEach(x => x.hidden = S.tab !== "chars");
-  document.querySelectorAll(".f-parts").forEach(x => x.hidden = S.tab !== "parts");
+  for (const t of ["chars", "parts", "groups"]) document.querySelectorAll(".f-" + t).forEach(x => x.hidden = S.tab !== t);
   $("#pager").hidden = S.tab === "gaps";
   $("#grid").hidden = $("#detail").hidden = S.tab === "gaps";
   $("#gaps").hidden = S.tab !== "gaps";
   $("#parts").hidden = S.tab !== "parts";
+  $("#gnav").hidden = S.tab !== "groups";
   const structs = [...new Set(D.entries.map(e => e.s))].sort();
   $("#struct").innerHTML = `<option value="">全部</option>` + structs.map(s => `<option${s === S.struct ? " selected" : ""}>${s}</option>`).join("");
+  $("#cmp").innerHTML = `<option value="-1">不对比</option>` + RUNS.map((x, k) => k === S.run ? "" :
+    `<option value="${k}"${k === S.cmp ? " selected" : ""}>${x.path} · L${x.level}</option>`).join("");
   document.documentElement.style.setProperty("--size", S.size + "px");
   if (S.tab === "gaps") return renderGaps(my);
 
-  if (S.tab === "parts") {
-    if (!S.part && D.parts.length) S.part = D.parts[0][0];
-    partsNav(D);
+  let cells, count, need;
+  if (S.tab === "groups") {
+    if (!curGroup() && GROUPS.length) S.group = GROUPS[0].id;
+    groupsNav();
+    const g = curGroup();
+    $("#gcopy").disabled = $("#gload").disabled = $("#gdel").disabled = !g;
+    const runs = cmp >= 0 ? [S.run, cmp] : [S.run];
+    const all = g ? groupCells(g, runs) : [];
+    cells = all; count = g ? `${g.name} · ${g.items.length} 处` + (cmp >= 0 ? ` · A ${rp(S.run)} / B ${rp(cmp)}` : "") : "";
+    need = runs.map(k => [k, g ? g.items.map(it => it.char) : []]);
+  } else {
+    if (S.tab === "parts") {
+      if (!S.part && D.parts.length) S.part = D.parts[0][0];
+      partsNav(D);
+    }
+    const items = S.tab === "parts" ? partItems(D) : charItems(D);
+    cells = items.map(({e, n, score}) => card(S.run, e, {n, score}));
+    count = S.tab === "parts" ? `${S.part} · ${items.length} 处` : `${items.length} / ${D.entries.length} 字`;
+    need = null;
   }
-  const items = S.tab === "parts" ? partItems(D) : charItems(D);
-  const pages = Math.max(1, Math.ceil(items.length / PAGE));
+  const pages = Math.max(1, Math.ceil(cells.length / PAGE));
   S.page = Math.min(Math.max(1, S.page), pages);
   writeHash();
   $("#pageinfo").textContent = `${S.page} / ${pages}`;
   $("#prev").disabled = S.page <= 1; $("#next").disabled = S.page >= pages;
-  $("#count").textContent = S.tab === "parts" ? `${S.part} · ${items.length} 处` : `${items.length} / ${D.entries.length} 字`;
-  const shown = items.slice((S.page - 1) * PAGE, S.page * PAGE);
-  $("#grid").innerHTML = shown.map(({e, n, score}) => {
-    const cap = n != null ? `<span>${e.c} <span class="muted">${n}</span></span><span class="${score != null && score < 0.85 ? "low" : "muted"}">${fmt(score)}</span>`
-                          : `<span>${e.c}</span><span class="${e.st}">${e.cf.toFixed(2)}</span>`;
-    return `<div class="card" data-c="${e.c}" data-n="${n ?? ""}"><svg viewBox="${D.viewbox}"></svg><div class="cap">${cap}</div></div>`;
-  }).join("") || `<p class="muted">没有符合条件的字。</p>`;
+  $("#count").textContent = count;
+  const from = (S.page - 1) * PAGE, shown = cells.slice(from, from + PAGE);
+  $("#grid").classList.toggle("pairs", S.tab === "groups" && cmp >= 0);
+  $("#grid").innerHTML = shown.map(c => S.tab === "groups" && cmp >= 0 ? `<div class="pair">${c}</div>` : c).join("")
+    || `<p class="muted">${S.tab === "groups" ? "本组是空的。" : "没有符合条件的字。"}</p>`;
   tray();
-  if (CUR && CUR.run === S.run) detail();
+  if (CUR) detail();
   const paint = () => {
     if (my !== seq) return;
-    document.querySelectorAll(".card:not(.drawn)").forEach(card => {
-      const e = D.byChar.get(card.dataset.c), g = GLYPHS.get(S.run + "|" + e.c), n = card.dataset.n || null;
+    document.querySelectorAll(".card[data-k]:not(.drawn)").forEach(el => {
+      const k = +el.dataset.k, D = idx(k), e = D.byChar.get(el.dataset.c), g = gl(k, e.c), n = el.dataset.n || null;
       if (!g) return;
-      card.querySelector("svg").outerHTML = svg(D, e, g, {focus: n, accent: true, at: marks(S.run, e.c, n)});
-      card.classList.add("drawn");
+      const at = el.dataset.at ? JSON.parse(el.dataset.at) : marks(k, e.c, n);
+      el.querySelector("svg").outerHTML = svg(D, e, g, {focus: n, accent: true, at});
+      el.classList.add("drawn");
     });
   };
   paint();   // glyphs cached by an earlier page or sort
-  await glyphs(S.run, [...new Set(shown.map(x => x.e.c))], paint);
+  const want = need ? need.map(([k, chars]) => [k, chars.slice(from, from + PAGE)])
+                    : [[S.run, [...new Set([...document.querySelectorAll(".card[data-k]")].map(el => el.dataset.c))]]];
+  await Promise.all(want.map(([k, chars]) => glyphs(k, [...new Set(chars)], paint)));
 }
 
 async function renderGaps(my) {
@@ -283,13 +359,15 @@ async function renderGaps(my) {
 }
 
 function detail() {
-  const D = INDEX.get(CUR.run), e = D && D.byChar.get(CUR.char), g = GLYPHS.get(CUR.run + "|" + CUR.char);
+  if (!(CUR.run < RUNS.length)) return;
+  const D = idx(CUR.run), e = D && D.byChar.get(CUR.char), g = gl(CUR.run, CUR.char);
   if (!e || !g) return;
   const sel = findSel(CUR.run, CUR.char, CUR.node);
   const chips = `<button data-n="" aria-pressed="${CUR.node == null}">全部</button>` + e.n.map(([n, label, score], k) =>
     `<button data-n="${n}" aria-pressed="${CUR.node === n}" style="border-color:${color(D, k)};border-width:2px">${n} ${label} <span class="muted">${fmt(score)}</span></button>`).join("");
   const j = Object.entries(e.j).map(([r, c]) => `${r}×${c}`).join(" ");
   $("#detail").innerHTML = `<p><b style="font-size:20px">${e.c}</b> ${e.cp} · ${e.ids} · ${e.s} · <span class="${e.st}">${e.st} ${e.cf.toFixed(3)}</span></p>
+    <p class="muted">${rp(CUR.run)}</p>
     ${svg(D, e, g, {focus: CUR.node, at: marks(CUR.run, e.c, CUR.node)})}
     <div class="chips">${chips}</div>
     ${j ? `<p class="muted">交接：${j}</p>` : ""}
@@ -315,10 +393,9 @@ function detail() {
 }
 function refresh() {
   tray(); detail();
-  const D = INDEX.get(S.run);
-  document.querySelectorAll(`.card[data-c="${CUR.char}"]`).forEach(card => {
-    const g = GLYPHS.get(S.run + "|" + CUR.char), n = card.dataset.n || null;
-    if (g) card.querySelector("svg").outerHTML = svg(D, D.byChar.get(CUR.char), g, {focus: n, accent: true, at: marks(S.run, CUR.char, n)});
+  document.querySelectorAll(`.card[data-k][data-c="${CUR.char}"]:not([data-at])`).forEach(el => {
+    const k = +el.dataset.k, g = gl(k, CUR.char), n = el.dataset.n || null;
+    if (g) el.querySelector("svg").outerHTML = svg(idx(k), idx(k).byChar.get(CUR.char), g, {focus: n, accent: true, at: marks(k, CUR.char, n)});
   });
 }
 
@@ -328,8 +405,9 @@ async function copy(t) {
     const a = document.createElement("textarea"); a.value = t; document.body.append(a); a.select();
     document.execCommand("copy"); a.remove();
   }
-  $("#copied").textContent = "已复制"; setTimeout(() => $("#copied").textContent = "", 1500);
+  note("已复制");
 }
+function note(t) { $("#copied").textContent = t; setTimeout(() => $("#copied").textContent = "", 2000); }
 
 // ---------- wiring ----------
 function bind() {
@@ -342,26 +420,60 @@ function bind() {
   for (const k of ["status", "struct", "sort"]) $("#" + k).onchange = e => set(k, e.target.value);
   $("#reseed").onclick = () => { S.sort = "random"; $("#sort").value = "random"; set("seed", S.seed + 1); };
   $("#q").onchange = e => set("q", e.target.value);
-  $("#partq").oninput = e => { S.partq = e.target.value; partsNav(INDEX.get(S.run)); writeHash(); };
+  $("#partq").oninput = e => { S.partq = e.target.value; partsNav(idx(S.run)); writeHash(); };
   $("#parts").onclick = e => { const b = e.target.closest("button[data-part]"); if (b) set("part", b.dataset.part); };
+  $("#gnav").onclick = e => { const b = e.target.closest("button[data-group]"); if (b) { $("#gdel").textContent = "删除本组"; set("group", b.dataset.group); } };
+  $("#cmp").onchange = e => set("cmp", +e.target.value, false);
   $("#prev").onclick = () => set("page", S.page - 1, false);
   $("#next").onclick = () => set("page", S.page + 1, false);
   $("#grid").onclick = e => {
-    const card = e.target.closest(".card");
-    if (!card) return;
-    CUR = {run: S.run, char: card.dataset.c, node: card.dataset.n || null};
+    const el = e.target.closest(".card[data-k]");
+    if (!el) return;
+    CUR = {run: +el.dataset.k, char: el.dataset.c, node: el.dataset.n || null};
     document.querySelectorAll(".card.cur").forEach(c => c.classList.remove("cur"));
-    card.classList.add("cur");
+    el.classList.add("cur");
     if (!e.altKey) toggleSel(CUR.run, CUR.char, CUR.node);
     detail();
   };
   $("#copy").onclick = () => copy(text());
   $("#show").onclick = () => { $("#text").hidden = !$("#text").hidden; $("#show").textContent = $("#text").hidden ? "查看文本" : "收起文本"; };
   $("#clear").onclick = () => { SEL = []; saveSel(); tray(); if (CUR) refresh(); };
+  $("#save").onclick = async () => {
+    const now = new Date(), pad = v => String(v).padStart(2, "0");
+    const name = $("#gname").value.trim() || `${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())} · ${SEL.length} 处`;
+    const created = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+    const group = {id: now.getTime().toString(36), name, created, items: SEL.map(s => ({...s, at: [...s.at]}))};
+    try { await storeGroups([...GROUPS, group]); } catch (err) { return note(`保存失败：${err.message}`); }
+    $("#gname").value = "";
+    note(`已存为分组「${name}」`);
+    if (S.tab === "groups") set("group", group.id);
+  };
+  // a group is shown, copied and loaded in the current run (A); its points are font units, valid in any run
+  $("#gcopy").onclick = () => { const g = curGroup(); if (g) copy(text(g.items.map(it => ({...it, run: rp(S.run)})), `分组「${g.name}」· ${g.items.length} 处`)); };
+  $("#gload").onclick = () => {
+    const g = curGroup(); if (!g) return;
+    for (const it of g.items) if (!findSel(S.run, it.char, it.node)) SEL.push({run: rp(S.run), char: it.char, node: it.node, at: [...it.at]});
+    saveSel(); tray(); note(`已加入 ${g.items.length} 处`);
+  };
+  $("#gdel").onclick = async () => {
+    const g = curGroup(); if (!g) return;
+    if ($("#gdel").textContent !== "确认删除") { $("#gdel").textContent = "确认删除"; return; }
+    $("#gdel").textContent = "删除本组";
+    try { await storeGroups(GROUPS.filter(x => x.id !== g.id)); } catch (err) { return note(`删除失败：${err.message}`); }
+    S.group = ""; render();
+  };
   document.addEventListener("keydown", e => {
     if (e.target.matches("input,select,textarea") || e.metaKey || e.ctrlKey) return;
     if (e.key === "ArrowLeft" && !$("#prev").disabled) $("#prev").click();
     if (e.key === "ArrowRight" && !$("#next").disabled) $("#next").click();
+  });
+  // coming back to the page after a rerun: pick up changed runs (and groups an agent wrote)
+  document.addEventListener("visibilitychange", async () => {
+    if (document.visibilityState !== "visible") return;
+    const before = JSON.stringify(GROUPS);
+    await loadGroups();
+    if (JSON.stringify(GROUPS) !== before && S.tab === "groups") render();
+    checkRuns();
   });
 }
 
@@ -375,7 +487,7 @@ function bind() {
   $("#status").value = S.status; $("#sort").value = S.sort; $("#q").value = S.q; $("#partq").value = S.partq;
   const paths = RUNS.map(r => r.path);
   SEL = SEL.filter(s => paths.includes(s.run));
-  await Promise.all([...new Set(SEL.map(s => paths.indexOf(s.run)))].map(index));
+  await Promise.all([loadGroups(), ...[...new Set(SEL.map(s => paths.indexOf(s.run)))].map(index)]);
   bind(); render();
 })();
 </script></body></html>

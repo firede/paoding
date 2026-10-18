@@ -126,7 +126,7 @@ def cmd_review(args):
     mmah_dir = Path(args.mmah)
     mmah = MMAH(mmah_dir) if (mmah_dir / "dictionary.txt").is_file() and (mmah_dir / "graphics.txt").is_file() else None
     try:
-        reviewer = review.Reviewer(font, args.font, args.runs, mmah)
+        reviewer = review.Reviewer(font, args.font, args.runs, mmah, args.groups)
     except (OSError, ValueError) as err:
         raise SystemExit(f"paoding review: {err}")
     review.serve(reviewer, args.host, args.port)
@@ -214,6 +214,7 @@ def main(argv=None):
     v.add_argument("runs", nargs="+", help="run directories (each with records.jsonl)")
     v.add_argument("--font", required=True, help="the OTF/TTF the runs were made from")
     v.add_argument("--mmah", default="data/mmah", help="to tell characters MMAH lacks from ones not run")
+    v.add_argument("--groups", default="out/review-groups.json", help="where saved groups of selections are kept")
     v.add_argument("--host", default="127.0.0.1")
     v.add_argument("--port", type=int, default=8417)
     v.set_defaults(func=cmd_review)

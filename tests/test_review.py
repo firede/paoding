@@ -1,6 +1,7 @@
 """Review server and inspect: what the reviewer sees and what the agent gets."""
 
 import json
+import os
 import threading
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -82,6 +83,11 @@ def test_http(reviewer):
         req = urllib.request.Request(base + "/api/glyphs", json.dumps({"run": 0, "chars": ["好", "照"]}).encode(),
                                      method="POST")
         assert list(json.load(urllib.request.urlopen(req))) == ["好"]
+        assert json.load(urllib.request.urlopen(base + "/api/groups"))["groups"] == []
+        req = urllib.request.Request(base + "/api/groups", json.dumps({"groups": [{"id": "x"}]}).encode(), method="POST")
+        with pytest.raises(urllib.error.HTTPError) as err:
+            urllib.request.urlopen(req)
+        assert err.value.code == 400
         with pytest.raises(urllib.error.HTTPError) as err:
             urllib.request.urlopen(base + "/api/index?run=3")
         assert err.value.code == 400
@@ -110,3 +116,33 @@ def test_inspect_char(tmp_path, outline_font, outline_segments, run_dir):
     assert hit["face"]["nodes"] == ["0", "1"] and hit["face"]["rule"] == "crossing"
     assert miss["unit"] is None and miss["nearest_strokes"]
     assert info["run"] == {"matches": True, "differs": []}
+
+
+def test_run_rereads_changed_records(tmp_path, run_dir, outline_font, mmah):
+    (tmp_path / "records.jsonl").write_bytes((run_dir / "records.jsonl").read_bytes())
+    reviewer = Reviewer(outline_font, outline_font.path, [tmp_path], mmah)
+    before = reviewer.runs_info()[0]["version"]
+    assert len(reviewer.index(0)["entries"]) == len(CHARS)
+    glyph = reviewer.glyph(0, "好")
+    lines = (run_dir / "records.jsonl").read_text(encoding="utf-8").splitlines()
+    (tmp_path / "records.jsonl").write_text("\n".join(lines[:2]) + "\n", encoding="utf-8")
+    os.utime(tmp_path / "records.jsonl", ns=(1, 1))   # a different mtime, however fast the rewrite
+    assert reviewer.runs_info()[0]["version"] != before
+    assert [e["c"] for e in reviewer.index(0)["entries"]] == [CHARS[0]]
+    assert reviewer.glyph(0, CHARS[0]) is not glyph
+
+
+def test_groups_round_trip(tmp_path, reviewer):
+    reviewer.groups_path = tmp_path / "sub" / "groups.json"
+    assert reviewer.groups() == []
+    saved = reviewer.save_groups([
+        {"id": "b", "name": "", "items": [{"run": "out/x", "char": "好", "node": "1", "at": [[1, 2]]}, {"char": "申"}]},
+        {"id": "a", "name": "first", "created": "2026-10-19T10:00:00", "items": []},
+    ])
+    assert [g["id"] for g in reviewer.groups()] == ["b", "a"]   # kept in the order given
+    assert reviewer.groups() == saved
+    assert saved[0]["name"] == "b" and saved[0]["items"][1] == {"run": "", "char": "申", "node": None, "at": []}
+    assert saved[0]["items"][0]["at"] == [[1.0, 2.0]]
+    with pytest.raises(KeyError):
+        reviewer.save_groups([{"id": "c"}])
+    reviewer.groups_path = None

@@ -5,11 +5,18 @@ so the page shows exactly the geometry a consumer of the records gets. The
 reviewer only looks and selects; the copied text names the run, the font and
 the characters (optionally a part and a point in font units), with the
 `paoding inspect` command that reproduces them.
+
+A run is reread when its records.jsonl changes, so rerunning into the same
+directory needs no restart. Selections can be kept as named groups, in their
+own order, in a JSON file next to the runs; a group can be shown against two
+runs side by side.
 """
 
 import hashlib
 import json
+import os
 import threading
+import time
 import unicodedata
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -35,19 +42,30 @@ def is_hanzi(char):
 
 class Run:
     def __init__(self, path, font_sha):
-        self.path = str(path)
-        lines = (Path(path) / "records.jsonl").read_text(encoding="utf-8").splitlines()
-        self.header = json.loads(lines[0])
-        if self.header.get("kind") != "header":
-            raise ValueError(f"{path}: records.jsonl has no header")
-        if self.header["font"]["sha256"] != font_sha:
-            raise ValueError(f"{path}: made from {self.header['font']['file']} with another SHA-256 than --font")
-        self.records = {}
+        self.path, self.font_sha = str(path), font_sha
+        self.file = Path(path) / "records.jsonl"
+        self.version = None
+        self.fresh()
+
+    def fresh(self):
+        """Reread records.jsonl if it changed since it was read; returns self."""
+        version = self.file.stat().st_mtime_ns
+        if version == self.version:
+            return self
+        lines = self.file.read_text(encoding="utf-8").splitlines()
+        header = json.loads(lines[0])
+        if header.get("kind") != "header":
+            raise ValueError(f"{self.path}: records.jsonl has no header")
+        if header["font"]["sha256"] != self.font_sha:
+            raise ValueError(f"{self.path}: made from {header['font']['file']} with another SHA-256 than --font")
+        records = {}
         for line in lines[1:]:
             rec = json.loads(line)
             if "units" not in rec:
-                raise ValueError(f"{path}: review covers outline fonts only ({rec['char']} has no units)")
-            self.records[rec["char"]] = rec
+                raise ValueError(f"{self.path}: review covers outline fonts only ({rec['char']} has no units)")
+            records[rec["char"]] = rec
+        self.header, self.records, self.version = header, records, version
+        return self
 
 
 def part_label(rec, node):
@@ -71,28 +89,35 @@ def entry(rec):
 
 
 class Reviewer:
-    def __init__(self, font, font_path, run_paths, mmah=None):
+    def __init__(self, font, font_path, run_paths, mmah=None, groups_path=None):
         self.font, self.font_path = font, str(font_path)
         sha = sha256(font_path)
         self.font_info = {"path": self.font_path, "file": Path(font_path).name, "sha256": sha}
         self.runs = [Run(p, sha) for p in run_paths]
         self.mmah = mmah
+        self.groups_path = Path(groups_path) if groups_path else None
         self.lock = threading.Lock()   # fontTools glyph sets load lazily and are not thread-safe
-        self.glyph = lru_cache(maxsize=8192)(self._glyph)
+        self._cached = lru_cache(maxsize=8192)(self._glyph)
+
+    def run(self, k):
+        return self.runs[k].fresh()
 
     def runs_info(self):
-        return [{"path": r.path, "level": r.header["params"].get("level"),
+        return [{"path": r.path, "version": str(r.version), "level": r.header["params"].get("level"),
                  "overrides": r.header["params"].get("overrides", []), "count": len(r.records)}
-                for r in self.runs]
+                for r in (run.fresh() for run in self.runs)]
 
     def index(self, k):
         upm = self.font.units_per_em
         descender = self.font.from_em(0, -120)[1]
-        run = self.runs[k]
+        run = self.run(k)
         return {"font": self.font_info, "run": self.runs_info()[k], "colors": ["#%02x%02x%02x" % c for c in COLORS],
                 "viewbox": f"0 {-(upm + descender):g} {upm:g} {upm:g}", "entries": [entry(r) for r in run.records.values()]}
 
-    def _glyph(self, k, char):
+    def glyph(self, k, char):
+        return self._cached(k, self.run(k).version, char)
+
+    def _glyph(self, k, version, char):
         rec = self.runs[k].records[char]
         with self.lock:
             views = realize_record(rec, self.font)
@@ -101,7 +126,7 @@ class Reviewer:
 
     def gaps(self, k):
         """The font's hanzi without a record in this run, by why."""
-        have = self.runs[k].records
+        have = self.run(k).records
         missing = [chr(c) for c in sorted(self.font.cmap) if is_hanzi(chr(c)) and chr(c) not in have]
         if self.mmah is None:
             groups = [("not-run", "不在本次运行中", missing)]
@@ -111,6 +136,27 @@ class Reviewer:
                        [c for c in missing if c in self.mmah])]
         return {"hanzi": len(have) + len(missing), "covered": len(have),
                 "groups": [{"key": key, "label": label, "chars": "".join(cs)} for key, label, cs in groups]}
+
+    def groups(self):
+        if self.groups_path is None or not self.groups_path.is_file():
+            return []
+        return json.loads(self.groups_path.read_text(encoding="utf-8"))["groups"]
+
+    def save_groups(self, groups):
+        """Replace the stored groups: [{id, name, created, items: [{run, char, node, at}]}], in order."""
+        if self.groups_path is None:
+            raise ValueError("no groups file")
+        clean = []
+        for g in groups:
+            items = [{"run": str(i.get("run", "")), "char": str(i["char"]), "node": i.get("node"),
+                      "at": [[float(x), float(y)] for x, y in i.get("at", [])]} for i in g["items"]]
+            clean.append({"id": str(g["id"]), "name": str(g.get("name") or g["id"]),
+                          "created": str(g.get("created") or time.strftime("%Y-%m-%dT%H:%M:%S")), "items": items})
+        self.groups_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.groups_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"groups": clean}, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, self.groups_path)
+        return clean
 
 
 def handler(reviewer):
@@ -146,6 +192,8 @@ def handler(reviewer):
                     self.send(reviewer.index(self.run_index(q)))
                 elif url.path == "/api/gaps":
                     self.send(reviewer.gaps(self.run_index(q)))
+                elif url.path == "/api/groups":
+                    self.send({"groups": reviewer.groups(), "file": str(reviewer.groups_path or "")})
                 else:
                     self.send({"error": "not found"}, status=404)
             except (KeyError, ValueError) as err:
@@ -154,14 +202,16 @@ def handler(reviewer):
         def do_POST(self):
             url = urlsplit(self.path)
             try:
-                if url.path != "/api/glyphs":
-                    self.send({"error": "not found"}, status=404)
-                    return
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
-                k = self.run_index({"run": [str(body.get("run", 0))]})
-                records = reviewer.runs[k].records
-                self.send({c: reviewer.glyph(k, c) for c in body.get("chars", []) if c in records})
-            except (KeyError, ValueError) as err:
+                if url.path == "/api/glyphs":
+                    k = self.run_index({"run": [str(body.get("run", 0))]})
+                    records = reviewer.run(k).records
+                    self.send({c: reviewer.glyph(k, c) for c in body.get("chars", []) if c in records})
+                elif url.path == "/api/groups":
+                    self.send({"groups": reviewer.save_groups(body["groups"])})
+                else:
+                    self.send({"error": "not found"}, status=404)
+            except (KeyError, ValueError, TypeError) as err:
                 self.send({"error": str(err)}, status=400)
 
     return Handler
