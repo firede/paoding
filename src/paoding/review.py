@@ -10,6 +10,10 @@ A run is reread when its records.jsonl changes, so rerunning into the same
 directory needs no restart. Selections can be kept as named groups, in their
 own order, in a JSON file next to the runs; a group can be shown against two
 runs side by side.
+
+The page also shows the structure checks a run recorded (flags) and, on
+request, the skeleton graph of a glyph: the joints and stretches those checks
+are made on, computed from the font alone.
 """
 
 import hashlib
@@ -23,8 +27,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import ids
-from .geometry import svg_d
+import numpy as np
+
+from . import ids, skeleton
+from .geometry import Canvas, svg_d
 from .record import realize_record
 from .report import COLORS, structure
 from .testset import gb2312_level
@@ -85,6 +91,7 @@ def entry(rec):
         "n": [[n, part_label(rec, n), min(per[n]["median_in"], per[n]["purity"]) if n in per else None]
               for n in rec["nodes"]],
         "j": rec["metrics"].get("junctions", {}), "i": rec.get("issues", []), "o": rec.get("overrides", []),
+        "f": len(rec.get("flags", [])),
     }
 
 
@@ -98,6 +105,7 @@ class Reviewer:
         self.groups_path = Path(groups_path) if groups_path else None
         self.lock = threading.Lock()   # fontTools glyph sets load lazily and are not thread-safe
         self._cached = lru_cache(maxsize=8192)(self._glyph)
+        self.skeleton = lru_cache(maxsize=1024)(self._skeleton)
 
     def run(self, k):
         return self.runs[k].fresh()
@@ -122,7 +130,25 @@ class Reviewer:
         with self.lock:
             views = realize_record(rec, self.font)
         cuts = ["M" + " L".join(f"{x:g} {y:g}" for x, y in line) for u in rec["units"] for line in u.get("cuts", [])]
-        return {v: {n: svg_d(p) for n, p in d.items()} for v, d in views.items()} | {"cuts": cuts}
+        return {v: {n: svg_d(p) for n, p in d.items()} for v, d in views.items()} | {"cuts": cuts, "flags": rec.get("flags", [])}
+
+    def _skeleton(self, char):
+        """The skeleton graph of a glyph in font units: stretches as SVG paths, joints as [x, y, r], bends and waists as [x, y]."""
+        canvas = Canvas()
+        with self.lock:
+            if not self.font.has(char):
+                raise KeyError(f"{char} is not in the font")
+            units = self.font.units(char)
+        ink = np.any([canvas.path_mask(u.path) for u in units], axis=0) if units else np.zeros(canvas.shape, bool)
+        g = skeleton.graph(ink, canvas)
+        pt = lambda p: [round(v, 1) for v in self.font.from_em(*p)]
+        scale = abs(self.font.from_em(1, 0)[0] - self.font.from_em(0, 0)[0])
+        return {
+            "segments": ["M" + " L".join("%g %g" % tuple(pt(p)) for p in s.points[::2].tolist() + [s.points[-1].tolist()])
+                         for s in g.segments],
+            "joints": [pt(j.point) + [round(j.radius * scale, 1)] for j in g.joints],
+            "bends": [pt(s.points[b]) for s in g.segments for b in s.bends + s.waists],
+        }
 
     def gaps(self, k):
         """The font's hanzi without a record in this run, by why."""
@@ -194,6 +220,8 @@ def handler(reviewer):
                     self.send(reviewer.gaps(self.run_index(q)))
                 elif url.path == "/api/groups":
                     self.send({"groups": reviewer.groups(), "file": str(reviewer.groups_path or "")})
+                elif url.path == "/api/skeleton":
+                    self.send(reviewer.skeleton(q["char"][0]))
                 else:
                     self.send({"error": "not found"}, status=404)
             except (KeyError, ValueError) as err:

@@ -29,10 +29,12 @@ from skimage.morphology import skeletonize
 from scipy.spatial import cKDTree
 
 from . import ids
+from . import skeleton as skel
 from .geometry import Canvas, area, from_shapely, op, polygons, resample, to_shapely, union_all
 from .register import Warp, register, register_parts, skeleton
 
 DEFAULT_THRESHOLD = 0.85
+FLAG_PENALTY = 0.85     # confidence factor for a split that fails a structure check
 
 
 @dataclass
@@ -66,6 +68,7 @@ class Segmentation:
     confidence: float = 0.0
     status: str = "low"
     issues: list = field(default_factory=list)
+    flags: list = field(default_factory=list)   # structure checks: {kind, at (em), nodes}
     overrides: list = field(default_factory=list)
     debug: dict = field(default_factory=dict)
     grid: object = None      # bitmap targets: PixelLabels instead of units
@@ -179,7 +182,8 @@ def segment(char, font, mmah, level=1, override=None, canvas=None, min_run=45.0,
     _assign(seg, font, units, masks, stroke_warps, override, min_run)
 
     seg.metrics = score(seg)
-    seg.confidence = seg.metrics["confidence"]
+    seg.flags = check_structure(seg)
+    seg.confidence = round(seg.metrics["confidence"] * (FLAG_PENALTY if seg.flags else 1.0), 3)
     seg.status = override.get("status") or ("auto" if seg.confidence >= threshold else "low")
     return seg
 
@@ -533,3 +537,32 @@ def score(seg, slack=0.0, node_purity=None):
         "inferred_strokes": sum(s not in ("matches", "whole", "override") for s in ref.sources),
         "confidence": round(conf, 3),
     }
+
+
+def check_structure(seg):
+    """Where the split disagrees with the target's own strokes (see skeleton.py).
+
+    split: a stretch of one stroke, away from where strokes meet, owned by two parts.
+    vote: a stretch owned by a part whose medians do not run along it, while another's do.
+    stray: an island of a part's overlay ink inside another part's stroke.
+    Returns dicts: kind, a point (em frame), the nodes involved (the owner first).
+    """
+    dbg, nodes = seg.debug, seg.nodes
+    canvas, flat, overlay = dbg["canvas"], dbg["flat_masks"], dbg["overlay_masks"]
+    if len(nodes) < 2:
+        return []
+    labels = np.full(canvas.shape, -1, int)
+    for k, n in enumerate(nodes):
+        labels[flat[n]] = k
+    g = skel.graph(dbg["ink"], canvas)
+    spans = skel.stretches(g)
+    own = skel.owned(g, spans, labels, canvas)
+    votes = skel.voted(g, spans, dbg["lines"], dbg["stroke_node"], dbg.get("spilt"))
+    dbg["skeleton"] = g
+    out = []
+    for d in skel.disputes(g, spans, own, votes):
+        involved = list(d["ink"]) if d["kind"] == "split" else [max(d["ink"], key=d["ink"].get), max(d["vote"], key=d["vote"].get)]
+        out.append({"kind": d["kind"], "at": tuple(d["at"]), "nodes": tuple(nodes[k] for k in involved)})
+    for d in skel.strays({k: overlay[n] for k, n in enumerate(nodes)}, labels, dbg["ink"], canvas):
+        out.append({"kind": "stray", "at": tuple(d["at"]), "nodes": (nodes[d["owner"]],)})
+    return out

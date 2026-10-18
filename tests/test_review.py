@@ -43,6 +43,16 @@ def test_index_entries(reviewer):
     assert all(score is not None for _, _, score in entries["申"]["n"])
 
 
+def test_skeleton_and_flags(reviewer):
+    sk = reviewer.skeleton("申")
+    assert sk["segments"] and all(d.startswith("M") for d in sk["segments"])
+    assert len(sk["joints"]) >= 4 and all(len(j) == 3 and j[2] > 0 for j in sk["joints"])   # 丨 through 日
+    assert reviewer.glyph(0, "申")["flags"] == reviewer.runs[0].records["申"].get("flags", [])
+    assert all("f" in e for e in reviewer.index(0)["entries"])
+    with pytest.raises(KeyError):
+        reviewer.skeleton("\U000E0000")
+
+
 def test_part_label_nested():
     assert review.part_label({"ids": "⿱⿰日召灬"}, "0") == "⿰日召"
     assert review.part_label({"ids": "⿱⿰日召灬"}, "0.1") == "召"

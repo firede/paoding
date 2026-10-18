@@ -2,8 +2,8 @@
 <html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>paoding review</title>
 <style>
-:root{--bg:#fff;--fg:#1d1d1f;--muted:#6e6e73;--card:#f5f5f7;--line:#d2d2d7;--ghost:#cdcdd2;--accent:#2478d6;--sel:#e0399b;--bad:#c62828;--good:#2e7d32}
-@media (prefers-color-scheme:dark){:root{--bg:#161618;--fg:#f2f2f2;--muted:#9a9aa0;--card:#232326;--line:#3a3a3e;--ghost:#47474c;--accent:#4f9cf0;--sel:#f06bb8;--bad:#ef6b6b;--good:#6cc070}}
+:root{--flag:#d98a00;--bg:#fff;--fg:#1d1d1f;--muted:#6e6e73;--card:#f5f5f7;--line:#d2d2d7;--ghost:#cdcdd2;--accent:#2478d6;--sel:#e0399b;--bad:#c62828;--good:#2e7d32}
+@media (prefers-color-scheme:dark){:root{--flag:#ffc233;--bg:#161618;--fg:#f2f2f2;--muted:#9a9aa0;--card:#232326;--line:#3a3a3e;--ghost:#47474c;--accent:#4f9cf0;--sel:#f06bb8;--bad:#ef6b6b;--good:#6cc070}}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 -apple-system,"PingFang SC","Noto Sans CJK SC",sans-serif;padding-bottom:56px}
@@ -36,6 +36,10 @@ nav button[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
 .ghost{fill:var(--ghost)}
 .cut{fill:none;stroke:var(--fg);stroke-width:1.2;vector-effect:non-scaling-stroke}
 .mark{fill:none;stroke:var(--sel);stroke-width:2.5;vector-effect:non-scaling-stroke}
+.flag{fill:none;stroke:var(--flag);stroke-width:2.5;stroke-dasharray:4 3;vector-effect:non-scaling-stroke}
+.skel{fill:none;stroke:var(--fg);stroke-width:1;vector-effect:non-scaling-stroke}
+.joint{fill:none;stroke:var(--fg);stroke-width:1;stroke-dasharray:2 2;vector-effect:non-scaling-stroke}
+.bend{fill:var(--fg)}
 aside{flex:0 0 340px;position:sticky;top:110px}
 #detail svg{cursor:crosshair}
 #detail .chips{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0}
@@ -54,11 +58,13 @@ aside{flex:0 0 340px;position:sticky;top:110px}
     <span class="tabs"><button data-tab="chars">字</button> <button data-tab="parts">部件</button> <button data-tab="groups">分组</button> <button data-tab="gaps">缺口</button></span>
     <label>视图 <select id="view"><option value="flat">拍平</option><option value="overlay">叠加</option></select></label>
     <label><input type="checkbox" id="cuts"> 切线</label>
+    <label title="结构检查标出的可疑位置（虚线圈）"><input type="checkbox" id="flags"> 标记</label>
+    <label title="右侧大图上显示目标字形的骨架：交点（虚线圆）、拐角和收腰（点）以及其间的各段"><input type="checkbox" id="skel"> 骨架</label>
     <label>大小 <input type="range" id="size" min="56" max="220" step="8"></label>
     <span class="muted" id="meta"></span>
   </div>
   <div class="row" id="filters">
-    <label class="f-chars">状态 <select id="status"><option value="">全部</option><option>low</option><option>auto</option><option>verified</option></select></label>
+    <label class="f-chars">状态 <select id="status"><option value="">全部</option><option>low</option><option>auto</option><option>verified</option><option value="flag">结构存疑</option></select></label>
     <label class="f-chars">结构 <select id="struct"><option value="">全部</option></select></label>
     <label class="f-chars">排序 <select id="sort"><option value="conf">置信度↑</option><option value="common">常用字优先</option><option value="unicode">Unicode</option><option value="random">随机抽样</option></select></label>
     <button class="f-chars" id="reseed" title="换一批随机样本">换一批</button>
@@ -90,11 +96,12 @@ aside{flex:0 0 340px;position:sticky;top:110px}
 <script>
 const $ = s => document.querySelector(s);
 const PAGE = 200;
-const DEFAULTS = {run: 0, tab: "chars", view: "flat", cuts: 1, size: 96, status: "", struct: "", sort: "conf", seed: 1, q: "", page: 1, part: "", partq: "", group: "", cmp: -1};
+const DEFAULTS = {run: 0, tab: "chars", view: "flat", cuts: 1, flags: 1, skel: 0, size: 96, status: "", struct: "", sort: "conf", seed: 1, q: "", page: 1, part: "", partq: "", group: "", cmp: -1};
 const S = {...DEFAULTS};
 let RUNS = [], FONT = null;
 const INDEX = new Map();   // "path@version" -> index payload, plus byChar and parts
 const GLYPHS = new Map();  // "path@version|char" -> glyph payload
+const SKELETONS = new Map();  // char -> skeleton graph (from the font alone)
 let SEL = [];              // {run (path), char, node, at}: survives restarts with other runs
 let GROUPS = [];           // [{id, name, created, items: [{run, char, node, at}]}], kept on the server
 let CUR = null;            // {run, char, node} shown in the detail panel
@@ -162,7 +169,8 @@ async function storeGroups(groups) {
 
 // ---------- drawing ----------
 function color(D, k) { return D.colors[k % D.colors.length]; }
-function svg(D, e, g, {focus = null, accent = false, at = []} = {}) {
+const FLAG_KINDS = {split: "一笔被切开", vote: "归属与笔画不符", stray: "孤立碎块"};
+function svg(D, e, g, {focus = null, accent = false, at = [], skel = null} = {}) {
   let body = "";
   if (focus != null && g.overlay[focus] != null) {
     const k = e.n.findIndex(x => x[0] === focus);
@@ -173,6 +181,12 @@ function svg(D, e, g, {focus = null, accent = false, at = []} = {}) {
     e.n.forEach(([n], k) => { body += `<path d="${g[S.view][n]}" fill="${color(D, k)}"${op}/>`; });
   }
   if (S.cuts) g.cuts.forEach(d => body += `<path d="${d}" class="cut"/>`);
+  if (skel) {
+    skel.segments.forEach(d => body += `<path d="${d}" class="skel"/>`);
+    skel.joints.forEach(([x, y, r]) => body += `<circle cx="${x}" cy="${y}" r="${r}" class="joint"/>`);
+    skel.bends.forEach(([x, y]) => body += `<circle cx="${x}" cy="${y}" r="7" class="bend"/>`);
+  }
+  if (S.flags) (g.flags || []).forEach(f => { if (focus == null || f.nodes.includes(focus)) body += `<circle cx="${f.at[0]}" cy="${f.at[1]}" r="40" class="flag"/>`; });
   at.forEach(([x, y]) => body += `<circle cx="${x}" cy="${y}" r="22" class="mark"/>`);
   return `<svg viewBox="${D.viewbox}"><g transform="scale(1,-1)">${body}</g></svg>`;
 }
@@ -218,6 +232,8 @@ function text(items = SEL, title = `选中 ${SEL.length} 处（人工觉得不�
         const [n, label, score] = e.n.find(x => x[0] === s.node) || [s.node, "?", null];
         line += ` · 部件 ${n} ${label} ${fmt(score)}`;
       }
+      const g = gl(k, s.char);
+      if (g && g.flags && g.flags.length) line += ` · 结构存疑 ${g.flags.map(f => `${f.kind}(${f.nodes.join("/")})@${Math.round(f.at[0])},${Math.round(f.at[1])}`).join(" ")}`;
       if (s.at.length) line += ` · 位置 ${s.at.map(([x, y]) => `(${x}, ${y})`).join(" ")}`;
       out.push(line);
     }
@@ -241,7 +257,7 @@ function shuffled(list, seed) {
 }
 function charItems(D) {
   if (S.q.trim()) return [...new Set([...S.q].filter(c => D.byChar.has(c)))].map(c => ({e: D.byChar.get(c)}));
-  let list = D.entries.filter(e => (!S.status || e.st === S.status) && (!S.struct || e.s === S.struct));
+  let list = D.entries.filter(e => (!S.status || (S.status === "flag" ? e.f > 0 : e.st === S.status)) && (!S.struct || e.s === S.struct));
   const cp = e => e.c.codePointAt(0);
   if (S.sort === "conf") list.sort((a, b) => a.cf - b.cf || cp(a) - cp(b));
   else if (S.sort === "unicode") list.sort((a, b) => cp(a) - cp(b));
@@ -366,11 +382,16 @@ function detail() {
   const chips = `<button data-n="" aria-pressed="${CUR.node == null}">全部</button>` + e.n.map(([n, label, score], k) =>
     `<button data-n="${n}" aria-pressed="${CUR.node === n}" style="border-color:${color(D, k)};border-width:2px">${n} ${label} <span class="muted">${fmt(score)}</span></button>`).join("");
   const j = Object.entries(e.j).map(([r, c]) => `${r}×${c}`).join(" ");
+  const sk = S.skel ? SKELETONS.get(e.c) : null;
+  if (S.skel && !sk) fetch(`/api/skeleton?char=${encodeURIComponent(e.c)}`).then(r => r.json())
+    .then(d => { if (d.segments) { SKELETONS.set(e.c, d); if (CUR && CUR.char === e.c) detail(); } });
+  const flags = (g.flags || []).map(f => `${FLAG_KINDS[f.kind] || f.kind}（${f.nodes.join("/")}）`).join("；");
   $("#detail").innerHTML = `<p><b style="font-size:20px">${e.c}</b> ${e.cp} · ${e.ids} · ${e.s} · <span class="${e.st}">${e.st} ${e.cf.toFixed(3)}</span></p>
     <p class="muted">${rp(CUR.run)}</p>
-    ${svg(D, e, g, {focus: CUR.node, at: marks(CUR.run, e.c, CUR.node)})}
+    ${svg(D, e, g, {focus: CUR.node, at: marks(CUR.run, e.c, CUR.node), skel: sk})}
     <div class="chips">${chips}</div>
     ${j ? `<p class="muted">交接：${j}</p>` : ""}
+    ${flags ? `<p class="muted">结构存疑：${flags}</p>` : ""}
     ${e.i.length ? `<p class="muted">问题：${e.i.join("；")}</p>` : ""}
     ${e.o.length ? `<p class="muted">覆盖：${e.o.join(", ")}</p>` : ""}
     <p><button id="dsel">${sel ? "取消选中" : "选中"}${CUR.node != null ? "此部件" : "此字"}</button>
@@ -416,6 +437,8 @@ function bind() {
   document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => set("tab", b.dataset.tab));
   $("#view").onchange = e => set("view", e.target.value, false);
   $("#cuts").onchange = e => set("cuts", e.target.checked ? 1 : 0, false);
+  $("#flags").onchange = e => set("flags", e.target.checked ? 1 : 0, false);
+  $("#skel").onchange = e => { S.skel = e.target.checked ? 1 : 0; writeHash(); if (CUR) detail(); };
   $("#size").oninput = e => { S.size = +e.target.value; document.documentElement.style.setProperty("--size", S.size + "px"); writeHash(); };
   for (const k of ["status", "struct", "sort"]) $("#" + k).onchange = e => set(k, e.target.value);
   $("#reseed").onclick = () => { S.sort = "random"; $("#sort").value = "random"; set("seed", S.seed + 1); };
@@ -483,7 +506,7 @@ function bind() {
   RUNS = d.runs; FONT = d.font;
   if (!(S.run < RUNS.length)) S.run = 0;
   $("#run").innerHTML = RUNS.map((r, k) => `<option value="${k}"${k === S.run ? " selected" : ""}>${r.path} · L${r.level}</option>`).join("");
-  $("#view").value = S.view; $("#cuts").checked = !!S.cuts; $("#size").value = S.size;
+  $("#view").value = S.view; $("#cuts").checked = !!S.cuts; $("#flags").checked = !!S.flags; $("#skel").checked = !!S.skel; $("#size").value = S.size;
   $("#status").value = S.status; $("#sort").value = S.sort; $("#q").value = S.q; $("#partq").value = S.partq;
   const paths = RUNS.map(r => r.path);
   SEL = SEL.filter(s => paths.includes(s.run));

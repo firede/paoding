@@ -70,6 +70,7 @@ def inspect_char(seg, font, points, out_dir, run_record=None):
     info["nodes"] = [{"node": ids.fmt(n), "part": part_label(rec, ids.fmt(n)), **per.get(ids.fmt(n), {})}
                      for n in seg.nodes]
     info["junctions"] = seg.metrics.get("junctions", {})
+    info["flags"] = [{"kind": f["kind"], "at": to_font(f["at"]), "nodes": [ids.fmt(n) for n in f["nodes"]]} for f in seg.flags]
     info["strokes"] = [{"stroke": i, "node": ids.fmt(seg.nodes[dbg["stroke_node"][i]]), "path": ids.fmt(ref.paths[i]),
                         "source": ref.sources[i], "width": round(dbg["widths"][i] / font.scale, 1)}
                        for i in range(len(lines))]
@@ -153,11 +154,25 @@ def panels(seg, font, em_points=()):
     flat = np.full((res, res, 3), 255, np.uint8)
     for k, n in enumerate(seg.nodes):
         flat[dbg["flat_masks"][n]] = color(k)
-    flat_im = finish(flat, label="拍平 + 切线")
+    flat_im = finish(flat, label="拍平 + 切线 + 骨架")
     d = ImageDraw.Draw(flat_im)
     for u in seg.units:
         for line in u.cuts:
             d.line([tuple(p) for p in canvas.to_px(line)], fill=(0, 0, 0), width=2)
+    # the skeleton graph the structure checks ran on, and what they flagged
+    g = dbg.get("skeleton")
+    for s in (g.segments if g else []):
+        d.line([tuple(p) for p in canvas.to_px(s.points)], fill=(255, 255, 255), width=1)
+        for b in s.bends + s.waists:
+            x, y = canvas.to_px(s.points[b:b + 1])[0]
+            d.ellipse((x - 3, y - 3, x + 3, y + 3), fill=(255, 255, 255))
+    for j in (g.joints if g else []):
+        (x, y), r = canvas.to_px(j.point[None])[0], j.radius * canvas.px
+        d.ellipse((x - r, y - r, x + r, y + r), outline=(255, 255, 255), width=1)
+    for f in seg.flags:
+        x, y = canvas.to_px(np.array([f["at"]]))[0]
+        d.ellipse((x - 18, y - 18, x + 18, y + 18), outline=(230, 150, 0), width=4)
+        d.text((x + 20, y - 8), f["kind"], fill=(230, 150, 0), font=_font(14))
     over = np.full((res, res, 3), 255.0)
     for k, n in enumerate(seg.nodes):
         m = dbg["overlay_masks"][n]
