@@ -47,7 +47,7 @@ def outline_font():
 
 @pytest.fixture(scope="session")
 def bitmap_font():
-    return BitmapTarget(require_file("data/fonts/unifont/unifont-17.0.05.hex"))
+    return BitmapTarget(require_file("data/fonts/unifont/unifont-17.0.05.hex.gz"))
 
 
 # 克路希勤咋方夕: cut units whose cut lines once failed to separate the faces

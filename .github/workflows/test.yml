@@ -1,0 +1,21 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      # the pinned inputs change only with sources.toml
+      - uses: actions/cache@v4
+        with:
+          path: data
+          key: data-${{ hashFiles('sources.toml') }}
+      - run: uv sync --locked
+      - run: uv run paoding fetch
+      - run: uv run pytest -q -rs

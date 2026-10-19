@@ -19,7 +19,7 @@ dependencies = [
 paoding = "paoding.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["brotli>=1.1", "pytest>=8"]
 
 [build-system]
 requires = ["hatchling"]

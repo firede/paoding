@@ -358,7 +358,7 @@ def test_formats_agree(tmp_path):
 
 @pytest.mark.parametrize("relative", [
     "data/fonts/fusion/fusion-pixel-12px-proportional-zh_hans.bdf",
-    "data/fonts/unifont/unifont-17.0.05.hex",
+    "data/fonts/unifont/unifont-17.0.05.hex.gz",
 ])
 def test_real_fonts(relative):
     path = Path(__file__).resolve().parents[1] / relative
