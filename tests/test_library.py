@@ -1,5 +1,7 @@
 """Units given whole to a part because the font draws them so elsewhere."""
 
+import numpy as np
+import pathops
 from shapely.geometry import box
 
 from paoding import library
@@ -39,3 +41,24 @@ def test_cut_unit_matched_whole(outline_font, mmah):
     (u,) = [u for u in seg.units if contour in u.contours]
     assert u.method == "match" and u.node == (0,) and u.like == ["院", "隆"]
     assert not seg.flags
+
+
+def test_fit_finds_a_moved_template():
+    ink = library.FIT.path_mask(square(300, 200, 260))
+    share, placed = library.fit(ink, square(250, 240, 260))     # the template's own character has it elsewhere
+    assert share > 0.97
+    assert np.allclose(placed.bounds, (300, 200, 560, 460), atol=6)
+    share, _ = library.fit(ink, square(250, 240, 400))          # too big to fit by scaling a little
+    assert share < 0.9
+
+
+def test_template_decides_a_touching_part(outline_font, mmah):
+    source = segment("節", outline_font, mmah)
+    part = pathops.Path()
+    for u in source.units:
+        if u.method == "direct" and u.node == (0,):
+            u.path.draw(part.getPen())
+    seg = segment("等", outline_font, mmah)
+    assert "split" in {f["kind"] for f in seg.flags}            # a stroke of ⺮ cut where it touches 寺
+    seg = segment("等", outline_font, mmah, templates={(0,): [("節", part)]})
+    assert seg.templates == {(0,): "節"} and not seg.flags

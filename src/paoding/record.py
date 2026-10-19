@@ -58,6 +58,7 @@ def to_record(seg, font):
         "metrics": seg.metrics,
         **({"flags": [{"kind": f["kind"], "at": pt(f["at"]), "nodes": [ids.fmt(n) for n in f["nodes"]]}
                       for f in seg.flags]} if seg.flags else {}),
+        **({"templates": {ids.fmt(n): c for n, c in seg.templates.items()}} if seg.templates else {}),
         **({"issues": seg.issues} if seg.issues else {}),
         **({"overrides": seg.overrides} if seg.overrides else {}),
     }

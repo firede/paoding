@@ -28,7 +28,7 @@ from scipy import ndimage
 from skimage.morphology import skeletonize
 from scipy.spatial import cKDTree
 
-from . import ids
+from . import ids, library
 from . import skeleton as skel
 from .geometry import Canvas, area, from_shapely, op, polygons, resample, to_shapely, union_all
 from .register import Warp, register, register_parts, skeleton
@@ -70,6 +70,7 @@ class Segmentation:
     status: str = "low"
     issues: list = field(default_factory=list)
     flags: list = field(default_factory=list)   # structure checks: {kind, at (em), nodes}
+    templates: dict = field(default_factory=dict)   # node -> character whose free-standing part was fitted
     overrides: list = field(default_factory=list)
     debug: dict = field(default_factory=dict)
     grid: object = None      # bitmap targets: PixelLabels instead of units
@@ -158,9 +159,12 @@ def _unit(v):
 # ---------- segmentation ----------
 
 def segment(char, font, mmah, level=1, override=None, canvas=None, min_run=45.0,
-            threshold=DEFAULT_THRESHOLD, refine=True, matched=None):
+            threshold=DEFAULT_THRESHOLD, refine=True, matched=None, templates=None):
     """matched: {contour index: (node path, [characters])}, units to give wholly to a
-    part because the font draws them so elsewhere (see library.py); overrides win."""
+    part because the font draws them so elsewhere (see library.py); overrides win.
+    templates: {node path: [(character, Path)]}, the part as the font draws it standing
+    free there (em frame, where that character has it); one that fits the ink decides
+    the part's ink in the units it is cut from."""
     override = override or {}
     matched = matched or {}
     canvas = canvas or Canvas()
@@ -184,12 +188,60 @@ def segment(char, font, mmah, level=1, override=None, canvas=None, min_run=45.0,
         stroke_warps = _refine(seg, font, ref, units, masks, ink, canvas, warp, level, override, min_run, matched)
     seg.debug.update(ref=ref, ink=ink, canvas=canvas, stroke_node=stroke_node)
     _assign(seg, font, units, masks, stroke_warps, override, min_run, matched)
+    placed = _place(seg, units, templates or {})
+    if placed:
+        seg.templates = {n: c for n, (g, c) in placed.items()}
+        seg.debug["templates"] = {n: g for n, (g, c) in placed.items()}
+        seg.units = []
+        seg.debug.pop("faces", None)
+        _assign(seg, font, units, masks, stroke_warps, override, min_run, matched)
 
     seg.metrics = score(seg)
     seg.flags = check_structure(seg)
     seg.confidence = round(seg.metrics["confidence"] * (FLAG_PENALTY if seg.flags else 1.0), 3)
     seg.status = override.get("status") or ("auto" if seg.confidence >= threshold else "low")
     return seg
+
+
+def _place(seg, units, templates, cover=0.95, steal=0.02, grow=5.0, explain=0.6):
+    """Fit the templates of the parts this split cuts: {node: (region, character)} for the
+    best of each part's templates that lies on the ink (share >= cover), takes no more
+    than `steal` of it from units given wholly to other parts, and holds at least
+    `explain` of the part's medians (a template smaller than the part here fits anywhere
+    along it: 十 of 华 in 畢, whose 十 runs the full height)."""
+    cut = {n for u in seg.units if u.method == "cut" for f in u.faces for n in f.nodes}
+    todo = [n for n in seg.nodes if n in cut and templates.get(n)]
+    if not todo:
+        return {}
+    fit = library.FIT
+    ink = ndimage.binary_dilation(np.any([fit.path_mask(u.path) for u in units], axis=0))
+    whole = [(u.node, fit.path_mask(u.path)) for u in seg.units if u.method != "cut"]
+    dbg = seg.debug
+    out = {}
+    for n in todo:
+        k = seg.nodes.index(n)
+        idx = [i for i, s in enumerate(dbg["stroke_node"]) if s == k]
+        core = np.concatenate([_core(dbg["lines"][i]) for i in idx])
+        reach = 0.5 * float(np.median([dbg["widths"][i] for i in idx]))
+        best = (0, None, None)
+        for c, p in templates[n]:
+            share, path = library.fit(ink, p)
+            if share < cover:
+                continue
+            mask = fit.path_mask(path)
+            taken = sum((mask & m).sum() for k, m in whole if k != n)
+            if taken > steal * mask.sum():
+                continue
+            g = to_shapely(path, steps=16).buffer(reach)
+            if shapely.contains_xy(g, core[:, 0], core[:, 1]).mean() < explain:
+                continue
+            # a shorter stroke always fits: of those that fit, the one covering the most ink
+            if share * mask.sum() > best[0]:
+                best = (share * mask.sum(), path, c)
+        if best[1] is not None:
+            # grown by about a pixel of the fit, so the outline's slivers along it are the part's
+            out[n] = (_areal(to_shapely(best[1], steps=16).buffer(grow, join_style="mitre")), best[2])
+    return out
 
 
 def _refine(seg, font, ref, units, masks, ink, canvas, warp, level, override, min_run, matched):
@@ -254,8 +306,17 @@ def _assign(seg, font, units, masks, stroke_warps, override, min_run, matched=No
 
     forced = {int(k): ids.unfmt(v) for k, v in (override.get("units") or {}).items()}
     matched = {c: v for c, v in (matched or {}).items() if v[0] in nodes and c not in forced}
-    # a unit the font draws wholly one part's elsewhere: other parts' medians on it were pulled there
+    # a unit the font draws wholly one part's elsewhere, or a fitted template: other
+    # parts' medians on it were pulled there
     dbg["pulled"] = [np.zeros(len(m), bool) for m in lines]
+    # (a template is all of its part, so the part's own medians off it were pulled too)
+    for n, g in dbg.get("templates", {}).items():
+        near = g.buffer(10.0)
+        for i, m in enumerate(lines):
+            on = shapely.contains_xy(g, m[:, 0], m[:, 1]) if nodes[stroke_node[i]] != n else \
+                ~shapely.contains_xy(near, m[:, 0], m[:, 1])
+            dbg["pulled"][i] |= on
+            dbg["spilt"][i] = dbg["spilt"][i] | on
     for j, u in enumerate(units):
         like = [matched[c][0] for c in u.contours if c in matched]
         if like and not any(c in forced for c in u.contours):
@@ -303,11 +364,21 @@ def _cut(res, unit, present, seg, flat_overrides, skip=(), min_face=25.0):
     shape = to_shapely(unit.path, steps=16)
     strokes = [i for i in range(len(lines)) if stroke_node[i] in present and i not in skip]
     bands = {i: _areal(band(lines[i], widths[i]).intersection(shape)) for i in strokes}
-    region = {}
+    # a fitted template is its part's ink here, and no other part's
+    fitted = {nodes.index(n): _areal(g.intersection(shape)) for n, g in dbg.get("templates", {}).items()
+              if nodes.index(n) in present}
+    fitted = {k: g for k, g in fitted.items() if not g.is_empty}
+    region = dict(fitted)
     for i in strokes:
         k = stroke_node[i]
-        region[k] = bands[i] if k not in region else _areal(region[k].union(bands[i]))
-    # ink outside every band joins the region it borders most
+        if k in fitted:
+            continue
+        b = bands[i]
+        for g in fitted.values():
+            b = _areal(b.difference(g))
+        region[k] = b if k not in region else _areal(region[k].union(b))
+    # ink outside every band joins the region it borders most (a template's too: the
+    # part's strokes may run a little longer here than where the template comes from)
     covered = shapely.unary_union(list(region.values()))
     for blob in polygons(shape.difference(covered)):
         contact = {k: blob.boundary.intersection(g.buffer(0.5)).length for k, g in region.items()}
