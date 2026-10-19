@@ -70,6 +70,8 @@ def _units(seg, pt):
             rec = {"contours": u.contours, "node": ids.fmt(u.node)}
             if u.method == "override":
                 rec["override"] = True
+            if u.method == "match":
+                rec["like"] = "".join(u.like)
             units.append(rec)
             continue
         units.append({

@@ -21,6 +21,13 @@ dest = "fonts/shs-sc.zip"
 extract = { "OTF/SimplifiedChinese/SourceHanSansSC-Regular.otf" = "fonts/SourceHanSansSC-Regular.otf", "LICENSE.txt" = "fonts/SourceHanSans-LICENSE.txt" }
 license = "OFL-1.1"
 
+[source-han-serif-sc]
+url = "https://github.com/adobe-fonts/source-han-serif/releases/download/2.003R/09_SourceHanSerifSC.zip"
+sha256 = "8f633642eedf9bf23ab3336faa3d03ce1b56c14d654cd25752bc829c05f79f0d"
+dest = "fonts/shserif-sc.zip"
+extract = { "OTF/SimplifiedChinese/SourceHanSerifSC-Regular.otf" = "fonts/SourceHanSerifSC-Regular.otf", "LICENSE.txt" = "fonts/SourceHanSerif-LICENSE.txt" }
+license = "OFL-1.1"
+
 [unifont]
 url = "https://unifoundry.com/pub/unifont/unifont-17.0.05/font-builds/unifont-17.0.05.hex.gz"
 sha256 = "2ae5311c8e123e9e85f5331cd012aa99757071df23243f1487fdbf8f3acd86be"

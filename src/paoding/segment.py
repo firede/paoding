@@ -48,12 +48,13 @@ class Face:
 @dataclass
 class UnitResult:
     contours: list
-    method: str              # direct | cut | override
+    method: str              # direct | cut | override | match
     node: tuple = None       # direct: the owning node
     cuts: list = field(default_factory=list)    # polylines (n, 2), em frame
     faces: list = field(default_factory=list)   # cut: Face per face
     runs: dict = field(default_factory=dict)    # node -> length of its medians inside, units
     path: object = None      # pathops Path of the unit, em frame
+    like: list = field(default_factory=list)    # match: characters where the font draws this unit wholly the part's
 
 
 @dataclass
@@ -157,8 +158,11 @@ def _unit(v):
 # ---------- segmentation ----------
 
 def segment(char, font, mmah, level=1, override=None, canvas=None, min_run=45.0,
-            threshold=DEFAULT_THRESHOLD, refine=True):
+            threshold=DEFAULT_THRESHOLD, refine=True, matched=None):
+    """matched: {contour index: (node path, [characters])}, units to give wholly to a
+    part because the font draws them so elsewhere (see library.py); overrides win."""
     override = override or {}
+    matched = matched or {}
     canvas = canvas or Canvas()
     ref = mmah.reference(char, override.get("structure"), depth=level)
     nodes, stroke_node = ref.nodes(level)
@@ -177,9 +181,9 @@ def segment(char, font, mmah, level=1, override=None, canvas=None, min_run=45.0,
     warp = register(ref.medians, ref.strokes, ink, canvas)
     stroke_warps = [warp] * len(ref.medians)
     if refine:
-        stroke_warps = _refine(seg, font, ref, units, masks, ink, canvas, warp, level, override, min_run)
+        stroke_warps = _refine(seg, font, ref, units, masks, ink, canvas, warp, level, override, min_run, matched)
     seg.debug.update(ref=ref, ink=ink, canvas=canvas, stroke_node=stroke_node)
-    _assign(seg, font, units, masks, stroke_warps, override, min_run)
+    _assign(seg, font, units, masks, stroke_warps, override, min_run, matched)
 
     seg.metrics = score(seg)
     seg.flags = check_structure(seg)
@@ -188,7 +192,7 @@ def segment(char, font, mmah, level=1, override=None, canvas=None, min_run=45.0,
     return seg
 
 
-def _refine(seg, font, ref, units, masks, ink, canvas, warp, level, override, min_run):
+def _refine(seg, font, ref, units, masks, ink, canvas, warp, level, override, min_run, matched):
     """Per-part warps, top-down: at each depth, split with the current warps, then
     register every part of that depth on its own, starting from its parent's warp."""
     stroke_warps = [warp] * len(ref.medians)
@@ -200,7 +204,9 @@ def _refine(seg, font, ref, units, masks, ink, canvas, warp, level, override, mi
         stroke_node = [parts.index(p[:depth]) for p in ref.paths]
         trial = Segmentation(seg.char, seg.glyph, depth, ref.ids, parts, [])
         trial.debug.update(ref=ref, ink=ink, canvas=canvas, stroke_node=stroke_node)
-        _assign(trial, font, units, masks, stroke_warps, override, min_run)
+        # a unit matched at this depth's part or below is that part's
+        known = {c: (n[:depth], like) for c, (n, like) in matched.items() if len(n) >= depth}
+        _assign(trial, font, units, masks, stroke_warps, override, min_run, known)
         overlay = trial.pieces("overlay")
         # parts that end above this depth are done
         todo = [k for k, p in enumerate(parts) if len(p) == depth]
@@ -214,7 +220,7 @@ def _refine(seg, font, ref, units, masks, ink, canvas, warp, level, override, mi
     return stroke_warps
 
 
-def _assign(seg, font, units, masks, stroke_warps, override, min_run, spill_share=0.5):
+def _assign(seg, font, units, masks, stroke_warps, override, min_run, matched=None, spill_share=0.5):
     """Draw the strokes through their warps, then give each unit to a part or cut it."""
     dbg, canvas, nodes = seg.debug, seg.debug["canvas"], seg.nodes
     ref, ink, stroke_node = dbg["ref"], dbg["ink"], dbg["stroke_node"]
@@ -247,15 +253,27 @@ def _assign(seg, font, units, masks, stroke_warps, override, min_run, spill_shar
                     else np.zeros(len(m), bool) for i, m in enumerate(lines)]
 
     forced = {int(k): ids.unfmt(v) for k, v in (override.get("units") or {}).items()}
+    matched = {c: v for c, v in (matched or {}).items() if v[0] in nodes and c not in forced}
+    # a unit the font draws wholly one part's elsewhere: other parts' medians on it were pulled there
+    dbg["pulled"] = [np.zeros(len(m), bool) for m in lines]
+    for j, u in enumerate(units):
+        like = [matched[c][0] for c in u.contours if c in matched]
+        if like and not any(c in forced for c in u.contours):
+            for i in np.flatnonzero(np.array([nodes[k] != like[0] for k in stroke_node])):
+                dbg["pulled"][i] |= hits[i][j]
+                dbg["spilt"][i] = dbg["spilt"][i] | hits[i][j]
     for j, (u, mask) in enumerate(zip(units, masks)):
         runs = np.zeros(len(nodes))
         np.add.at(runs, stroke_node, np.where(spill[:, j], 0.0, run[:, j]))
         res = UnitResult(list(u.contours), "direct", path=u.path,
                          runs={nodes[k]: round(float(v), 1) for k, v in enumerate(runs) if v > 0})
         hit = [c for c in u.contours if c in forced]
+        like = [c for c in u.contours if c in matched]
         present = np.flatnonzero(runs >= min_run)
         if hit:
             res.method, res.node = "override", forced[hit[0]]
+        elif like:
+            res.method, (res.node, res.like) = "match", matched[like[0]]
         elif len(nodes) == 1 or len(present) <= 1:
             k = int(present[0]) if len(present) == 1 else int(np.bincount(nearest[mask], minlength=len(nodes)).argmax())
             res.node = nodes[k]
@@ -461,9 +479,12 @@ def _owner(face, lab, strokes, lines, widths, stroke_node, nodes):
 
 # ---------- scoring ----------
 
-def _core(line, spilt=None):
-    """The middle 70% of a median, without points spilt onto another unit (unless that is all of it)."""
+def _core(line, spilt=None, pulled=None):
+    """The middle 70% of a median, without points spilt onto another unit (unless that is all of it);
+    nothing if all of it was pulled onto a unit matched to another part."""
     a, b = int(len(line) * 0.15), max(int(len(line) * 0.85), 1) + 1
+    if pulled is not None and pulled[a:b].all():
+        return line[:0]
     if spilt is None or spilt[a:b].all():
         return line[a:b]
     return line[a:b][~spilt[a:b]]
@@ -484,7 +505,7 @@ def score(seg, slack=0.0, node_purity=None):
     dbg = seg.debug
     canvas, ref, lines, widths = dbg["canvas"], dbg["ref"], dbg["lines"], dbg["widths"]
     stroke_node, stroke_warps = dbg["stroke_node"], dbg["stroke_warps"]
-    spilt = dbg.get("spilt")
+    spilt, pulled = dbg.get("spilt"), dbg.get("pulled")
     overlay = {n: canvas.path_mask(p) for n, p in seg.pieces("overlay").items()}
     flat = {n: canvas.path_mask(p) for n, p in seg.pieces("flat").items()}
     dbg.update(overlay_masks=overlay, flat_masks=flat)
@@ -498,7 +519,10 @@ def score(seg, slack=0.0, node_purity=None):
         # stroke ends differ most between styles (kaishu dots and tails run
         # longer): judge the middle 70% of each median, with some slack
         # stretches spilt onto another unit's ink are not the part's (see _assign)
-        core = np.concatenate([_core(lines[i], spilt[i] if spilt else None) for i in idx])
+        core = np.concatenate([_core(lines[i], spilt[i] if spilt else None, pulled[i] if pulled else None)
+                               for i in idx])
+        if not len(core):
+            core = np.concatenate([_core(lines[i]) for i in idx])
         near = ndimage.distance_transform_edt(~overlay[n]) / canvas.px
         inside = ndimage.map_coordinates(near, canvas.index(core), order=1) <= max(0.25 * width, slack)
         sp = skel[flat[n][ys, xs]]
@@ -506,7 +530,7 @@ def score(seg, slack=0.0, node_purity=None):
             own = cKDTree(pts).query(sp)[0]
             cov = float((own < 0.75 * width + 15).mean())
             # ink that sits clearly nearer another part's strokes than its own
-            others = [lines[i] for i, s in enumerate(stroke_node) if s != k]
+            others = [lines[i][~spilt[i]] if spilt else lines[i] for i, s in enumerate(stroke_node) if s != k]
             other = cKDTree(np.concatenate(others)).query(sp)[0] if others else np.full(len(sp), np.inf)
             purity = float(1 - ((own > 0.75 * width + 15) & (other < own - 0.5 * width)).mean())
         else:

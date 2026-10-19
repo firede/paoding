@@ -8,10 +8,12 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import ids, library, record, report, testset
 from . import overrides as ov
-from . import record, report, testset
+from .geometry import area
 from .mmah import MMAH
-from .segment import DEFAULT_THRESHOLD, segment
+from .review import part_label
+from .segment import DEFAULT_THRESHOLD, realize, segment
 from .segment_bitmap import segment_bitmap
 
 _worker = {}
@@ -30,6 +32,7 @@ class Outcome:
     tile: object = None
     error: str = ""
     secs: float = 0.0
+    shapes: list = field(default_factory=list)   # outline units: (first contour, whole | cut, node, shape)
 
 
 def _init(font_path, ppem, mmah_root, override_paths, level, threshold, tiles="all"):
@@ -40,19 +43,60 @@ def _init(font_path, ppem, mmah_root, override_paths, level, threshold, tiles="a
                    overrides=overrides, level=level, threshold=threshold, tiles=tiles)
 
 
-def _one(char):
+def _one(task):
+    """task: a character, or (character, matched units) for the second pass (see library.py)."""
+    char, matched = task if isinstance(task, tuple) else (task, None)
     w = _worker
     o = ov.for_char(w["overrides"], char)
     t = time.time()
     try:
-        run = segment_bitmap if w["font"].kind == "bitmap" else segment
-        seg = run(char, w["font"], w["mmah"], level=w["level"], override=o, threshold=w["threshold"])
+        if w["font"].kind == "bitmap":
+            seg = segment_bitmap(char, w["font"], w["mmah"], level=w["level"], override=o, threshold=w["threshold"])
+        else:
+            seg = segment(char, w["font"], w["mmah"], level=w["level"], override=o, threshold=w["threshold"],
+                          matched=matched)
         # a tile is a few hundred KB: on large runs keep only the ones the sheets show
         drawn = w["tiles"] == "all" or (w["tiles"] == "low" and seg.status == "low")
         return Outcome(char, seg.ids, seg.status, seg.confidence, seg.metrics, seg.issues,
-                       record.to_record(seg, w["font"]), report.tile(seg) if drawn else None, secs=time.time() - t)
+                       record.to_record(seg, w["font"]), report.tile(seg) if drawn else None, secs=time.time() - t,
+                       shapes=_shapes(seg) if seg.grid is None else [])
     except Exception as err:  # keep the run going; the failure is reported
         return Outcome(char, error=f"{type(err).__name__}: {err}", secs=time.time() - t)
+
+
+def _shapes(seg):
+    """Each unit's shape, with the node owning it whole, or for a cut unit the node owning most of it."""
+    out = []
+    for u in seg.units:
+        if u.method == "cut":
+            share = {}
+            for face, piece in zip(u.faces, realize(u.path, u.cuts, u.faces)):
+                share[face.flat] = share.get(face.flat, 0.0) + area(piece)
+            out.append((u.contours[0], "cut", ids.fmt(max(share, key=share.get)), library.describe(u.path)))
+        elif u.method == "direct":
+            out.append((u.contours[0], "whole", ids.fmt(u.node), library.describe(u.path)))
+    return out
+
+
+def _matches(results):
+    """Second-pass tasks: characters with a cut unit shaped like units the font gives wholly to its main owner."""
+    lib = library.Library()
+    for r in results:
+        if r.status == "auto" and not r.record.get("flags"):
+            for _, kind, node, shape in r.shapes:
+                if kind == "whole":
+                    lib.add(part_label(r.record, node), shape, r.char)
+    tasks = []
+    for r in results:
+        matched = {}
+        for contour, kind, node, shape in r.shapes:
+            if kind == "cut":
+                like = [c for c in lib.like(part_label(r.record, node), shape) if c != r.char]
+                if len(like) >= lib.min_chars:
+                    matched[contour] = (ids.unfmt(node), like[:3])
+        if matched:
+            tasks.append((r.char, matched))
+    return tasks
 
 
 def cmd_run(args):
@@ -79,6 +123,17 @@ def cmd_run(args):
             results = list(pool.map(_one, chars, chunksize=8))
     else:
         results = [_one(c) for c in chars]
+    # second pass: units the font draws wholly one part's elsewhere
+    tasks = _matches([r for r in results if not r.error]) if font.kind == "outline" else []
+    if tasks:
+        if args.jobs > 1:
+            with ProcessPoolExecutor(args.jobs, initializer=_init, initargs=init + (tiles,)) as pool:
+                again = {r.char: r for r in pool.map(_one, tasks, chunksize=4)}
+        else:
+            again = {r.char: r for r in map(_one, tasks)}
+        results = [again.get(r.char, r) for r in results]
+        print(f"{sum(len(m) for _, m in tasks)} cut units in {len(tasks)} characters given whole, "
+              f"shaped like the font's own units of that part elsewhere")
 
     failed = [r for r in results if r.error]
     ok = [r for r in results if not r.error]
@@ -162,7 +217,11 @@ def cmd_inspect(args):
         if char not in mmah or not font.has(char):
             print(f"{char}: not in {'MMAH' if char not in mmah else 'the font'}, skipped", file=sys.stderr)
             continue
-        seg = segment(char, font, mmah, level=level, override=ov.for_char(overrides, char), threshold=threshold)
+        rec = run_recs.get(char) or {}
+        # units the run gave whole from the font's own shapes elsewhere: the library needs the whole run to rebuild
+        matched = {u["contours"][0]: (ids.unfmt(u["node"]), list(u["like"])) for u in rec.get("units", ()) if "like" in u}
+        seg = segment(char, font, mmah, level=level, override=ov.for_char(overrides, char), threshold=threshold,
+                      matched=matched)
         info = diagnose.inspect_char(seg, font, points, out / char, run_recs.get(char) if args.run else None)
         weakest = min(info.get("nodes", []), key=lambda n: min(n.get("median_in", 1), n.get("purity", 1)), default=None)
         line = f"{char} {info['ids']} {info['status']} {info['confidence']:.3f}"
