@@ -71,6 +71,7 @@ class Segmentation:
     issues: list = field(default_factory=list)
     flags: list = field(default_factory=list)   # structure checks: {kind, at (em), nodes}
     templates: dict = field(default_factory=dict)   # node -> character whose free-standing part was fitted
+    composed: bool = False   # the reference was composed from an IDS (not in MMAH)
     overrides: list = field(default_factory=list)
     debug: dict = field(default_factory=dict)
     grid: object = None      # bitmap targets: PixelLabels instead of units
@@ -176,7 +177,8 @@ def segment(char, font, mmah, level=1, override=None, canvas=None, min_run=45.0,
     masks = [canvas.path_mask(u.path) for u in units]
     ink = np.any(masks, axis=0)
 
-    seg = Segmentation(char, font.glyph_name(char), level, ref.ids, nodes, [], issues=list(ref.issues))
+    seg = Segmentation(char, font.glyph_name(char), level, ref.ids, nodes, [], issues=list(ref.issues),
+                       composed=ref.composed)
     seg.overrides = sorted(k for k in override if override[k])
     if not ink.any():
         seg.issues.append("empty glyph")

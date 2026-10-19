@@ -74,7 +74,10 @@ class OutlineFont:
         # where contours overlap, the parts left on the boundary still decide
         bounds = [shapely.MultiLineString([np.vstack([c, c[:1]]) for c in flatten(u.path)]) for u in units]
         for i, c in enumerate(originals):
-            pts = shapely.points(np.concatenate(flatten(c)))
+            rings = flatten(c)
+            if not rings:
+                continue    # draws no ink (Source Han Serif's 珽 has a contour of one line)
+            pts = shapely.points(np.concatenate(rings))
             d = [np.median(shapely.distance(pts, b)) for b in bounds]
             units[int(np.argmin(d))].contours.append(i)
         return [u for u in units if u.contours]

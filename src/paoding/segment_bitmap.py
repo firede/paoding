@@ -46,7 +46,8 @@ def segment_bitmap(char, font, mmah, level=1, override=None, canvas=None, thresh
     nodes = _stack(nodes, override.get("stack"))
     stroke_node = [nodes.index(p[:level]) for p in ref.paths]
     g = font.bitmap(char)
-    seg = Segmentation(char, font.glyph_name(char), level, ref.ids, nodes, [], issues=list(ref.issues))
+    seg = Segmentation(char, font.glyph_name(char), level, ref.ids, nodes, [], issues=list(ref.issues),
+                       composed=ref.composed)
     seg.overrides = sorted(k for k in override if override[k])
     ink = canvas.path_mask(font.pixel_path(g, g.bitmap))
     if not ink.any():

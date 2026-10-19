@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pathops
 
-from . import ids, library, record, report, testset
+from . import compose, ids, library, record, report, testset
 from . import overrides as ov
 from .geometry import area
 from .mmah import MMAH
@@ -38,12 +38,21 @@ class Outcome:
     parts: list = field(default_factory=list)    # outline parts: (node, cut anywhere, contours of its whole units, box)
 
 
-def _init(font_path, ppem, mmah_root, override_paths, level, threshold, tiles="all"):
+def _init(font_path, ppem, mmah_root, ids_path, override_paths, level, threshold, tiles="all"):
     """tiles: which contact-sheet tiles workers draw and send back: all | low | none."""
     from .target import open_target
     overrides = ov.load(override_paths)
-    _worker.update(font=open_target(font_path, ppem), mmah=MMAH(mmah_root, overrides["structure"]),
+    _worker.update(font=open_target(font_path, ppem), mmah=MMAH(mmah_root, overrides["structure"], _table(ids_path)),
                    overrides=overrides, level=level, threshold=threshold, tiles=tiles)
+
+
+def _ids_file(path):
+    """The IDS table to compose references from, if it is there (paoding fetch); '' for none."""
+    return path if path and Path(path).is_file() else None
+
+
+def _table(path):
+    return compose.read_ids(path) if path else None
 
 
 def _one(task):
@@ -124,7 +133,8 @@ def _second(results):
     owner, and flagged or low characters with a cut part the font draws standing free elsewhere."""
     lib, free = library.Library(), library.Templates()
     for r in results:
-        if r.status == "auto" and not r.record.get("flags"):
+        # composed references are rougher: their characters use the library but do not add to it
+        if r.status == "auto" and not r.record.get("flags") and not r.record.get("composed"):
             for _, kind, node, shape in r.shapes:
                 if kind == "whole":
                     lib.add(part_label(r.record, node), shape, r.char)
@@ -160,8 +170,11 @@ def cmd_run(args):
         chars = list(dict.fromkeys(args.chars))
     else:
         chars = MMAH(args.mmah).chars()
+        if Path(args.tgh).is_file():
+            chars = list(dict.fromkeys(chars + compose.read_tgh(args.tgh)))
+    ids_path = _ids_file(args.ids)
     override_paths = ([] if args.no_builtin_overrides else [ov.BUILTIN]) + args.overrides
-    init = (args.font, args.ppem, args.mmah, override_paths, args.level, args.threshold)
+    init = (args.font, args.ppem, args.mmah, ids_path, override_paths, args.level, args.threshold)
     _init(*init)
     font, mmah = _worker["font"], _worker["mmah"]
     excluded = {c for c, g in _worker["overrides"]["glyph"].items() if g.get("status") == "exclude"}
@@ -194,7 +207,7 @@ def cmd_run(args):
     failed = [r for r in results if r.error]
     ok = [r for r in results if not r.error]
     params = {"level": args.level, "ppem": args.ppem, "threshold": args.threshold, "overrides": _override_names(override_paths)}
-    refs = [Path(args.mmah) / "dictionary.txt", Path(args.mmah) / "graphics.txt"]
+    refs = [Path(args.mmah) / "dictionary.txt", Path(args.mmah) / "graphics.txt"] + ([ids_path] if ids_path else [])
     with open(out / "records.jsonl", "w", encoding="utf-8") as f:
         f.write(json.dumps(record.header(font, refs, params), ensure_ascii=False) + "\n")
         for r in ok:
@@ -267,7 +280,7 @@ def cmd_inspect(args):
               file=sys.stderr)
     font = _outline_font(args.font)
     overrides = ov.load(override_paths)
-    mmah = MMAH(args.mmah, overrides["structure"])
+    mmah = MMAH(args.mmah, overrides["structure"], _table(_ids_file(args.ids)))
     out = Path(args.out)
     for char, points in targets.items():
         if char not in mmah or not font.has(char):
@@ -313,6 +326,10 @@ def main(argv=None):
     r.add_argument("--font", required=True, help="OTF/TTF, or bitmap: BDF, Unifont hex, OTB")
     r.add_argument("--ppem", type=int, help="bitmap strike size, or pixel size of a pixel-outline font")
     r.add_argument("--mmah", default="data/mmah", help="directory with dictionary.txt and graphics.txt")
+    r.add_argument("--ids", default="data/ids/IDS.TXT",
+                   help="IDS table to compose references for characters MMAH lacks (used if present; '' for none)")
+    r.add_argument("--tgh", default="data/unihan/Unihan_OtherMappings.txt",
+                   help="by default run MMAH's characters and the 通用规范汉字表 (kTGH) from this file, if present")
     g = r.add_mutually_exclusive_group()
     g.add_argument("--chars", help="characters to run")
     g.add_argument("--testset", help="test set file (char<TAB>...)")
@@ -341,6 +358,7 @@ def main(argv=None):
     i.add_argument("--font", required=True, help="OTF/TTF")
     i.add_argument("--run", help="run directory: use its level, threshold and builtin overrides, and compare results")
     i.add_argument("--mmah", default="data/mmah")
+    i.add_argument("--ids", default="data/ids/IDS.TXT", help="as for run")
     i.add_argument("--level", type=int, help="default: the run's, else 1")
     i.add_argument("--threshold", type=float)
     i.add_argument("--overrides", action="append", default=[], help="override TOML; repeatable")

@@ -51,6 +51,7 @@ def to_record(seg, font):
         "glyph": seg.glyph,
         "level": seg.level,
         "ids": seg.ids,
+        **({"composed": True} if seg.composed else {}),
         "nodes": [ids.fmt(n) for n in seg.nodes],
         "status": seg.status,
         "confidence": seg.confidence,

@@ -1,5 +1,6 @@
 """Download the pinned inputs listed in sources.toml into a data directory."""
 
+import gzip
 import hashlib
 import shutil
 import tomllib
@@ -29,7 +30,8 @@ def fetch(sources, data_dir, only=None):
             tmp = dest.with_name(dest.name + ".part")
             print(f"{name}: downloading {e['url']}")
             with urllib.request.urlopen(e["url"]) as r, open(tmp, "wb") as out:
-                shutil.copyfileobj(r, out)
+                # some archives send the file gzipped whatever the request asked for
+                shutil.copyfileobj(gzip.GzipFile(fileobj=r) if r.headers.get("Content-Encoding") == "gzip" else r, out)
             got = sha256(tmp)
             if got != e["sha256"]:
                 tmp.unlink()

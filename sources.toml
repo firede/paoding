@@ -14,6 +14,20 @@ sha256 = "a28c478b5178e98f67f510b2d52fde08a69dc664654ef43498253b9b764d46ee"
 dest = "mmah/graphics.txt"
 license = "Arphic Public License (stroke data derived from AR PL fonts)"
 
+[babelstone-ids]
+# IDS.TXT is updated in place; this is the 2025-06-27 file as archived
+url = "https://web.archive.org/web/20260811013723id_/https://babelstone.co.uk/CJK/IDS.TXT"
+sha256 = "cc2a0a97e6a51ed6ebe59870ef2af66e83f3c3c27387d79b4441bb2d791d78b1"
+dest = "ids/IDS.TXT"
+license = "no rights reserved: free to use without permission or attribution (see the file's header)"
+
+[unihan]
+url = "https://www.unicode.org/Public/17.0.0/ucd/Unihan.zip"
+sha256 = "f7a48b2b545acfaa77b2d607ae28747404ce02baefee16396c5d2d7a8ef34b5e"
+dest = "unihan/Unihan.zip"
+extract = { "Unihan_OtherMappings.txt" = "unihan/Unihan_OtherMappings.txt" }
+license = "Unicode License v3"
+
 [source-han-sans-sc]
 url = "https://github.com/adobe-fonts/source-han-sans/releases/download/2.005R/09_SourceHanSansSC.zip"
 sha256 = "ef7364f7ac2564be1ae9c1d74276de2653fe38b73449070398c4fc0b7e032ff1"

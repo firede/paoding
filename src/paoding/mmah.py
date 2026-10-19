@@ -6,6 +6,9 @@ the MMAH geometry is written to any output.
 
 MMAH graphics use a 1024 grid, y up, ascent 900 and descent 124; they are
 mapped into the em frame (1000 units, -120..880).
+
+Given an IDS table, characters MMAH lacks get references composed from their
+parts (see compose.py); their strokes count as inferred.
 """
 
 import json
@@ -16,6 +19,7 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 from . import ids
+from .compose import Composer
 from .geometry import FlattenPen, draw_svg
 
 
@@ -31,8 +35,9 @@ class Reference:
     strokes: list            # flattened stroke outlines, em frame
     medians: list            # stroke medians, em frame
     paths: list              # node path of each stroke (tuple)
-    sources: list            # how each path was decided: matches | unknown-leaf | nearest | override
+    sources: list            # how each path was decided: matches | composed | unknown-leaf | nearest | override
     radical: str = ""
+    composed: bool = False   # not in MMAH: composed from an IDS and other characters' strokes
     issues: list = field(default_factory=list)
     notes: list = field(default_factory=list)   # components left unexpanded, and why
 
@@ -49,9 +54,11 @@ class Reference:
 
 
 class MMAH:
-    def __init__(self, root, structures=None):
-        """structures: structure overrides by character, used for components met while expanding."""
+    def __init__(self, root, structures=None, table=None):
+        """structures: structure overrides by character, used for components met while expanding.
+        table: {char: IDS} to compose references for characters MMAH lacks."""
         self.structures = structures or {}
+        self.composed, self.failed = set(), set()
         root = Path(root)
         self.dictionary, self.graphics = {}, {}
         with open(root / "dictionary.txt", encoding="utf-8") as f:
@@ -62,12 +69,24 @@ class MMAH:
             for line in f:
                 e = json.loads(line)
                 self.graphics[e["character"]] = e
+        self.composer = Composer(self.dictionary, self.graphics, table) if table else None
 
     def __contains__(self, char):
-        return char in self.dictionary and char in self.graphics
+        if char in self.dictionary and char in self.graphics:
+            return True
+        if self.composer is None or char in self.dictionary or char in self.failed:
+            return False
+        made = self.composer.entry(char)
+        if made is None:
+            self.failed.add(char)
+            return False
+        self.dictionary[char], self.graphics[char] = made
+        self.composed.add(char)
+        return True
 
     def chars(self):
-        return [c for c in self.dictionary if c in self.graphics]
+        """The characters MMAH itself has."""
+        return [c for c in self.dictionary if c in self.graphics and c not in self.composed]
 
     def reference(self, char, override=None, depth=1, _seen=()):
         """Build the reference for one character; override may replace ids and matches.
@@ -76,6 +95,8 @@ class MMAH:
         themselves characters are expanded from their own entries until the
         tree reaches `depth` (see _expand).
         """
+        if char not in self:
+            raise KeyError(char)
         e, g = self.dictionary[char], self.graphics[char]
         override = override or {}
         decomposition = override.get("ids", e["decomposition"])
@@ -88,7 +109,8 @@ class MMAH:
         for m in g["medians"]:
             medians.append(np.array([to_em(x, y) for x, y in m]))
 
-        ref = Reference(char, decomposition, None, strokes, medians, [], [], e.get("radical", ""))
+        ref = Reference(char, decomposition, None, strokes, medians, [], [], e.get("radical", ""),
+                        composed=char in self.composed)
         if decomposition[0] in ids.ARITY:
             try:
                 ref.tree = ids.parse(decomposition)
@@ -106,7 +128,7 @@ class MMAH:
             ref.sources = ["whole"] * len(strokes)
             return ref
 
-        src = "override" if "matches" in override else "matches"
+        src = "override" if "matches" in override else "composed" if ref.composed else "matches"
         # strokes MMAH leaves unmatched belong to its unknown parts; with several
         # unknown parts, to the deepest node holding all of them
         unknown = _unknown_leaves(ref.tree)
@@ -171,7 +193,9 @@ class MMAH:
         stays a leaf.
         """
         for path, leaf in ids.leaf_paths(ref.tree):
-            if len(path) >= depth or leaf == ids.UNKNOWN or leaf in seen or leaf not in self or self.basic(leaf):
+            # only MMAH's own entries: a composed component would bring its guesses into MMAH characters
+            if (len(path) >= depth or leaf == ids.UNKNOWN or leaf in seen or leaf in self.composed
+                    or not (leaf in self.dictionary and leaf in self.graphics) or self.basic(leaf)):
                 continue
             here = [i for i, p in enumerate(ref.paths) if p == path]
             if not here:

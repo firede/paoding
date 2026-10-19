@@ -480,7 +480,7 @@ def test_registration_transforms_and_thin_box():
 
 def test_cli_run(tmp_path, monkeypatch, outline_font, mmah):
     # Reuse session inputs while exercising parsing, workers, and output writing.
-    def cached_mmah(path, structures=None):
+    def cached_mmah(path, structures=None, table=None):
         assert Path(path).resolve() == ROOT / "data/mmah"
         return mmah
 
