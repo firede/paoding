@@ -11,6 +11,8 @@
 
 paoding 为字体中的每个汉字写出一份标注：字形的哪一块属于哪个部件。标注只引用字体自己的轮廓，可用于部件着色、检索、逐部件展示。
 
+按部件着色的字体可以直接下载：[paoding-color-fonts](https://github.com/firede/paoding-color-fonts)。
+
 覆盖 10807 字（Make Me a Hanzi 收录的字，加上《通用规范汉字表》）。思源黑体 99% 自动通过，思源宋体 98%。也支持位图字体。
 
 ## 开始
@@ -27,7 +29,6 @@ uv run paoding review out/sans --font data/fonts/SourceHanSansSC-Regular.otf
 - [使用](docs/usage.md)
 - [原理](docs/how-it-works.md)
 - [标注格式](docs/format.md)
-- [数据来源与许可](docs/sources.md)
 
 ## 许可
 
